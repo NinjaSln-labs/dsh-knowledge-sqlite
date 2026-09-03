@@ -1,8 +1,10 @@
 # dsh-knowledge-sqlite
 
-[English](README.md) | [中文](README.zh.md)
+[English](README.md) | 简体中文（中文为准，英文翻译可能滞后）
 
-> 中文为权威版本（README.zh.md），英文翻译可能滞后。
+[![npm version](https://img.shields.io/npm/v/dsh-knowledge-sqlite)](https://www.npmjs.com/package/dsh-knowledge-sqlite)
+[![License](https://img.shields.io/npm/l/dsh-knowledge-sqlite)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/NinjaSln-labs/dsh-knowledge-sqlite?style=social)](https://github.com/NinjaSln-labs/dsh-knowledge-sqlite)
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的跨会话知识插件：`ctx.knowledge` 服务接缝 + `knowledge_*` 模型工具，基于 SQLite FTS5 **trigram** 检索（中文子串匹配）+ **L1 查询扩展**。
 
@@ -98,6 +100,10 @@ probe 实验套件（A/C/D 确定性臂精确复现 + contract 全过）。
 - [REVIEWS](docs/REVIEWS.md) — 11 轮评审链摘要（0C/0M/0m）
 - [EXPERIMENTS](docs/EXPERIMENTS.md) — RESULTS-v3 + 原型验证（kpro-2、在线 L1、契约 11/11、ask 门控）
 - 原型工作台：`research/memory-knowledge-seam/experiments/prototype/`（SQLite 蓝图、JS↔FTS5 校准 0/72 无偏差、动态插件验证）
+
+## ⭐ 支持
+
+如果这个插件对你有帮助，欢迎到 [GitHub 仓库](https://github.com/NinjaSln-labs/dsh-knowledge-sqlite) 点个 ⭐ Star——它是我持续维护的动力。也欢迎提 issue / PR 一起改进。
 
 ## License
 

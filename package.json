@@ -2,6 +2,21 @@
   "name": "dsh-knowledge-sqlite",
   "description": "Cross-session knowledge for DeepSeek Harness: ctx.knowledge service + knowledge_* tools, SQLite FTS5 trigram retrieval (CJK substring) with L1 query expansion. V1.11 contract (write/update/search/list/delete + budget + events + error codes).",
   "version": "0.1.6",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "knowledge-base",
+    "cross-session",
+    "sqlite",
+    "fts5",
+    "trigram",
+    "full-text-search",
+    "chinese",
+    "cjk",
+    "query-expansion",
+    "retrieval"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -16,15 +31,9 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/store.js",
-    "lib/search.js",
-    "lib/expand.js",
-    "lib/tools.js",
-    "lib/probe.js",
-    "lib/types.js",
-    "lib/*.d.ts",
+    "lib",
     "cordis.patch.yml",
+    "README.md",
     "README.zh.md",
     "CHANGELOG.md"
   ],
@@ -37,7 +46,8 @@
   },
   "license": "MIT",
   "author": {
-    "name": "ninjasln"
+    "name": "ninjasln",
+    "url": "https://github.com/NinjaSln-labs"
   },
   "repository": {
     "type": "git",

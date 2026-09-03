@@ -2,6 +2,10 @@
 
 [English](README.md) | [中文](README.zh.md)
 
+[![npm version](https://img.shields.io/npm/v/dsh-knowledge-sqlite)](https://www.npmjs.com/package/dsh-knowledge-sqlite)
+[![License](https://img.shields.io/npm/l/dsh-knowledge-sqlite)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/NinjaSln-labs/dsh-knowledge-sqlite?style=social)](https://github.com/NinjaSln-labs/dsh-knowledge-sqlite)
+
 > Chinese (README.zh.md) is the authoritative version; the English translation may lag behind.
 
 Cross-session knowledge for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a `ctx.knowledge` service seam plus `knowledge_*` model tools, backed by SQLite FTS5 **trigram** retrieval (CJK substring search) with **L1 query expansion**.
@@ -98,6 +102,10 @@ probe 实验套件（A/C/D 确定性臂精确复现 + contract 全过）。
 - [REVIEWS](docs/REVIEWS.md) — 11-round review chain summary (0C/0M/0m)
 - [EXPERIMENTS](docs/EXPERIMENTS.md) — RESULTS-v3 + prototype verification (kpro-2, live L1, contract 11/11, ask-gate)
 - Prototype workbench: `research/memory-knowledge-seam/experiments/prototype/` (SQLite blueprint, JS↔FTS5 calibration 0/72 mismatch, dynamic-plugin verification)
+
+## ⭐ Support
+
+If this plugin helps you, consider giving it a ⭐ Star on [GitHub](https://github.com/NinjaSln-labs/dsh-knowledge-sqlite) — it keeps the project going. Issues and PRs are welcome.
 
 ## License
 

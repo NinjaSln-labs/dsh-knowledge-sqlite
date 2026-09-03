@@ -2,9 +2,11 @@
 
 [English](README.md) | [中文](README.zh.md)
 
+> Chinese (README.zh.md) is the authoritative version; the English translation may lag behind.
+
 Cross-session knowledge for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a `ctx.knowledge` service seam plus `knowledge_*` model tools, backed by SQLite FTS5 **trigram** retrieval (CJK substring search) with **L1 query expansion**.
 
-Implements the [V1.11 knowledge seam proposal](https://github.com/NinjaSln-labs/dsh-plugins/blob/main/dsh-knowledge-sqlite/docs/DESIGN.md) (11-round reviewed design, community proposal — not an official DSH feature). Contract: `write/update/search/list/delete` + budget + events + error codes.
+Implements the [V1.11 knowledge seam proposal](docs/DESIGN.md) (11-round reviewed design, community proposal — not an official DSH feature). Contract: `write/update/search/list/delete` + budget + events + error codes.
 
 ```sh
 dsh plugin add dsh-knowledge-sqlite
@@ -96,3 +98,7 @@ probe 实验套件（A/C/D 确定性臂精确复现 + contract 全过）。
 - [REVIEWS](docs/REVIEWS.md) — 11-round review chain summary (0C/0M/0m)
 - [EXPERIMENTS](docs/EXPERIMENTS.md) — RESULTS-v3 + prototype verification (kpro-2, live L1, contract 11/11, ask-gate)
 - Prototype workbench: `research/memory-knowledge-seam/experiments/prototype/` (SQLite blueprint, JS↔FTS5 calibration 0/72 mismatch, dynamic-plugin verification)
+
+## License
+
+[MIT](LICENSE) © ninjasln

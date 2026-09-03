@@ -7,7 +7,7 @@
  *  - knowledge_probe 为实验套件 e2e 载体（阶段 3 验收门禁）
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { Context } from '@deepseek-ai/cordis'
 import type { KnowledgeService } from './index.ts'
 import type { Scope, ScopeFilter } from './types.ts'

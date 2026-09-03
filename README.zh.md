@@ -2,9 +2,11 @@
 
 [English](README.md) | [中文](README.zh.md)
 
+> 中文为权威版本（README.zh.md），英文翻译可能滞后。
+
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的跨会话知识插件：`ctx.knowledge` 服务接缝 + `knowledge_*` 模型工具，基于 SQLite FTS5 **trigram** 检索（中文子串匹配）+ **L1 查询扩展**。
 
-实现了 [V1.11 知识接缝提案](https://github.com/NinjaSln-labs/dsh-plugins/blob/main/dsh-knowledge-sqlite/docs/DESIGN.md)（11 轮评审的设计，社区提案——非 DSH 官方功能）。契约：`write/update/search/list/delete` + budget + 事件 + 错误码。
+实现了 [V1.11 知识接缝提案](docs/DESIGN.md)（11 轮评审的设计，社区提案——非 DSH 官方功能）。契约：`write/update/search/list/delete` + budget + 事件 + 错误码。
 
 ```sh
 dsh plugin add dsh-knowledge-sqlite
@@ -96,3 +98,7 @@ probe 实验套件（A/C/D 确定性臂精确复现 + contract 全过）。
 - [REVIEWS](docs/REVIEWS.md) — 11 轮评审链摘要（0C/0M/0m）
 - [EXPERIMENTS](docs/EXPERIMENTS.md) — RESULTS-v3 + 原型验证（kpro-2、在线 L1、契约 11/11、ask 门控）
 - 原型工作台：`research/memory-knowledge-seam/experiments/prototype/`（SQLite 蓝图、JS↔FTS5 校准 0/72 无偏差、动态插件验证）
+
+## License
+
+[MIT](LICENSE) © ninjasln

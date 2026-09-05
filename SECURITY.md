@@ -2,11 +2,12 @@
 
 ## 支持面
 
-本仓库是<宿主能力面 / 服务用途>。安全边界值得关注的面：
+本仓库是 DeepSeek Harness 的跨会话知识库插件（`ctx.knowledge` 服务 + `knowledge_*` 工具）。安全边界值得关注的面：
 
-- <列出暴露面：网络入口（RPC/HTTP 端点及访问限制）、读写的敏感数据、对外请求>
-- <配置值来源与敏感度说明>
-- <发布产物携带的最小依赖>
+- **暴露面**：无网络入口（无 HTTP/RPC 端点）；仅通过 Cordis 宿主机制接收 Agent 调用；写入路径受 ask 门控（`tools/pre-execute`）；global scope 写权限限定于 `allowedGlobalWriters` allowlist
+- **敏感数据**：SQLite 文件 `~/.dsh/knowledge.sqlite` 存储用户写入的知识条目（workspace 隔离，session-scoped 条目仅本会话可见）；不接触 token、密码、PII
+- **对外请求**：L1 查询扩展会调用宿主 LLM 服务（`ctx.get('llm')`），超时降级为纯 lexica，不泄漏 query 内容
+- **发布产物**：零运行时外部网络依赖（`dependencies` 全为 dsh 宿主包 alpha.5，经宿主 peer 链可达）
 
 ## 报告漏洞
 

@@ -3,20 +3,25 @@
 > 本文件由模板单源拼装（core + 分类 append）：发布通道/发布流程/应急发布由分类 append 决定；
 > 共性纪律在 core。
 
-## 发布状态（<日期> 更新）
+## 发布状态（2026-09-05 更新）
 
 | 项 | 状态 |
 |---|---|
-| <发布面> | <版本 / dist-tag 状态> |
-| GitHub | `NinjaSln-labs/dsh-knowledge-sqlite` main；发版 tag <tag 格式> |
-| 本地验证 | <验证链全绿 + 实测结论> |
+| npm | 0.1.6 latest（monorepo 末次）；单库化后首个版本 **v0.1.7 待发布** |
+| GitHub | `NinjaSln-labs/dsh-knowledge-sqlite` main；发版 tag `knowledge-sqlite-v*` |
+| 本地验证 | 38/38 vitest 全绿 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）+ check:deploy FAIL 0 |
 
 ## 版本历史
 
 > 每版一行：**做了什么 + 为什么 + 怎么验证的**；重大教训展开写进当版条目。
 
-- **x.y.z** — <一句话主旨>（<日期>）：<要点；breaking 标注；验证方式>
-
+- **0.1.6** — 单库迁移收尾：部署纪律落地（check:deploy + pre-commit）、devDeps 全量宿主包补齐、生态规范对齐（keywords/files/author/README徽章/⭐段/topics）、Trusted Publisher 发布管道（OIDC publish.yml）；验证：38/38 test + smoke + check:deploy | 单库时代最后发布（0.1.7 尚未发版）
+- **0.1.5** — L1 扩展持久缓存（SQLite `expansion_cache` 表替代进程 Map）；reasoningEffort: 'off' 防止扩展跟随主模型切 reasoning 路由退化；验证：smoke 基线不变，首次 live 扩展落库实测
+- **0.1.4** — FTS5 trigram 检索 + L1 查询扩展；验证：RESULTS-v3 实验基线
+- **0.1.3** — 语料 hermetic 入库（fixture/corpus/）；验证：路径漂移回归测试
+- **0.1.2** — strict JSON 校验：-0/NaN 归一化、undefined 字段 omit；验证：契约检查 11/11
+- **0.1.1** — ask 门控 + global allowlist + workspace 隔离；验证：probe contract 套件
+- **0.1.0** — V1.11 契约初始实现
 
 ## 发布后验证（共性纪律）
 
@@ -74,6 +79,6 @@ npm run build && npm run typecheck && npm test && npm publish --access public
 
 ## 维护要点
 
-- **外部数据源变更**（如 pricing）：更新对应数据文件并同步 `updatedAt`
-- **client bundle**：改 client 源码后必须 `npm run build`；host 与 client 变更都需要重启 + 刷新浏览器
-- **安全**：无 token 管理（OIDC）；workflow 权限最小化
+- **扩展 provider/model 跟随会话默认**：主模型切 reasoning 路由会使扩展隐性退化；0.1.6 已加 `reasoningEffort: 'off'`，部署建议 patch `queryExpansion.model: 'deepseek-v4-flash'`
+- **单库 `file:` 依赖 pnpm 不重拷**：改源码后 `npm run build` → 删 `~/.dsh/profiles/web/node_modules/dsh-knowledge-sqlite` 再 `dsh plugin --profile web install`
+- **安全**：无 token 管理（OIDC）；workflow 权限最小化（contents: read + id-token: write）

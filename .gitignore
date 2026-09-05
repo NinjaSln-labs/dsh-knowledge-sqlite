@@ -2,4 +2,6 @@ node_modules/
 lib/
 *.tgz
 .DS_Store
-
+.scaffold-update/
+.scaffold-merge/
+.scaffold/conflicts/

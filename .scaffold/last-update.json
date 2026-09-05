@@ -1,0 +1,29 @@
+{
+  "preUpdateHEAD": "6c306912e9d970334d1109ea3c11ca903cc00cbd",
+  "type": "dsh-plugin",
+  "at": "2026-09-05T12:45:53.500Z",
+  "files": {
+    ".githooks/pre-commit": "ADDED",
+    ".github/copilot-instructions.md": "ADDED",
+    ".github/workflows/ci.yml": "ADDED",
+    ".github/workflows/publish.yml": "MERGE-REVIEW",
+    ".gitignore": "MERGE-REVIEW",
+    "AGENTS.md": "MERGE-REVIEW",
+    "CLAUDE.md": "ADDED",
+    "CONTRIBUTING.md": "ADDED",
+    "DEVELOPMENT.md": "ADDED",
+    "LICENSE": "MERGE-REVIEW",
+    "PUBLISHING.md": "ADDED",
+    "README.en.md": "ADDED",
+    "README.md": "MERGE-REVIEW",
+    "SECURITY.md": "ADDED",
+    "package.json": "MERGE-REVIEW",
+    "scripts/build.mjs": "ADDED",
+    "scripts/check-deploy.mjs": "MERGE-REVIEW",
+    "scripts/verify.mjs": "ADDED",
+    "src/config.ts": "ADDED",
+    "src/index.ts": "MERGE-REVIEW",
+    "tsconfig.build.json": "MERGE-REVIEW",
+    "tsconfig.json": "MERGE-REVIEW"
+  }
+}

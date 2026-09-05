@@ -110,3 +110,6 @@ pre-commit 钩子（`.githooks/pre-commit`）：提交涉及 `src/`、`scripts/`
 | 省略 client half | UI 消失 | 实现规范 + 质量 DoD |
 | registry 装的插件改了源码没发版 | 同版本号不同内容，行为错位 | `check:deploy` + pre-commit 硬拦截 + AGENTS.md 内联 |
 | 读宿主服务返回形状没查契约就猜 | 「看似对上」实未生效，被缓存/降级掩盖，重启即露馅 | Sprint 计划契约预检（stub 必须按宿主真实契约形状写） |
+| `src/config.ts` 模板骨架占位符直接入库 | 含 `<配置项…>` 注释，无实际引用，影响 typecheck 可读性 | update 后审查 `.scaffold-merge/` 差异 + 入库前 grep 占位符 |
+| `.scaffold-update/` 残留目录入库 | 中间产物进入 git 历史，污染工作区，下次 update 行为不可预测 | update 后必须 `rm -rf .scaffold-update/` + commit 清理 |
+| MERGE-REVIEW 文件不审查直接采纳模板版 | 丢失项目定制内容（如 README 徽章/AGENTS 部署纪律/包名占位） | update 后逐文件 `diff` 对比，保留项目版本再删除 `.scaffold-merge/` |

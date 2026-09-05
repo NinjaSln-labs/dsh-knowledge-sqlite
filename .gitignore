@@ -1,6 +1,7 @@
 node_modules/
 lib/
 *.tgz
+*.log
 .DS_Store
 .scaffold-update/
 .scaffold-merge/

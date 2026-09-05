@@ -1,0 +1,20 @@
+# NEVER EDIT MANUALLY——scaffold 状态层（手改会欺骗三方合并算法）
+{
+  "template": "scaffold/dsh-plugin",
+  "adopt": false,
+  "at": "2026-09-05T12:45:53.480Z",
+  "files": {
+    ".githooks/pre-commit": "86467d1dbae53ee05a37b3d81e4a88782e13434a053e45ea445f94b7a69a1b74",
+    ".github/copilot-instructions.md": "ca41af108135c647809030076ea8596873cda3ad1133baac26726cc2278c7653",
+    ".github/workflows/ci.yml": "31c170fa1a62bae63ccc57ebfcb4c273e3d680c8d3d4b70883d1e4f3ef38f690",
+    "CLAUDE.md": "336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49",
+    "CONTRIBUTING.md": "b36203ad950bf21ba8128ac9e8ef0cac8ed7ac260c99b884c8acb564088bf3e4",
+    "DEVELOPMENT.md": "4de72e4c498706e25566f86e526d2ba21d88efae4aa2b09b04b0b71775118312",
+    "PUBLISHING.md": "23f44137e18f0ce8d7fef1df413084eb79d9ab06f4e09b9a302b63e9bb43a436",
+    "README.en.md": "e1f6dab7dfd449d1e382dea6355ac2809783843b5dbae594b4316d9a9a2a765d",
+    "SECURITY.md": "b0e53d2737ebe46ac25df3e04f0c01d7dc2c1a63e32843e1a09ce00d2ed9d50e",
+    "scripts/build.mjs": "90e438a3764af0be28d3c97bbfb5659fd47a3715a528ae859c901bae9c0acbb3",
+    "scripts/verify.mjs": "92a4a6aa65f45ddf9070025b93d9f70fd23ab0ac59a227b20df4d4f9d8602e52",
+    "src/config.ts": "4201993adef4d90227d409d926caf05092c704f4236e22ad117830be3e1294ec"
+  }
+}

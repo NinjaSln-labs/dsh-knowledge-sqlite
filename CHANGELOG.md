@@ -1,5 +1,22 @@
 # CHANGELOG — dsh-knowledge-sqlite
 
+## 0.1.7 (2026-09-05)
+
+- **fix**: `dsh-scope`/`dsh-typert-protocol`/`dsh-util-values` 从 `dependencies` 移入
+  `devDependencies`——避免 `file:` 安装时 pnpm 将它们装进 profile node_modules，
+  产生第二套 `@deepseek-ai/*` 导致 `check:deploy` FAIL（symbol 错配/400 前兆）。
+  这三个包已是 `peerDependencies`（alpha.5），运行时经宿主 fallback 链提供，
+  本地仅需 devDeps 供测试路径解析。
+- **chore**: scaffold adopt `dsh-plugin` 模板——新增 `ci.yml`/`githooks/pre-commit`/
+  `CLAUDE.md`/`CONTRIBUTING.md`/`DEVELOPMENT.md`/`PUBLISHING.md`/`SECURITY.md`/
+  `README.en.md`/`scripts/build.mjs`/`scripts/verify.mjs`；10 个 MERGE-REVIEW 文件
+  全部保留项目定制版本（未采纳模板骨架）。
+- **docs**: `SECURITY.md`/`PUBLISHING.md` 填实模板占位符；`DEVELOPMENT.md` 速查表
+  追加 3 行（config.ts 占位/.scaffold-update 残留/MERGE-REVIEW 误采纳）；
+  `package.json` files 加入 `README.en.md`。
+- **test**: 验证链全绿——vitest 38/38 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）
+  + check:deploy FAIL 0 + contract probe 12/12。
+
 ## 0.1.6 (2026-08-16)
 
 - **fix**: 扩展请求显式关闭思维链（`reasoningEffort: 'off'` → pi-ai `thinking: {type:'disabled'}`）。

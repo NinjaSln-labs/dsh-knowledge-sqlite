@@ -1,5 +1,21 @@
 # CHANGELOG — dsh-knowledge-sqlite
 
+## 0.1.9 (2026-09-10)
+
+- **chore(deps)**: 宿主升级对齐——`peerDependencies` 与 `devDependencies` 中的
+  `@deepseek-ai/dsh-*` 从 `^0.1.2-alpha.4/5` 统一到 `^0.1.5-rc.1`，
+  `@deepseek-ai/schemastery` `^3.18.1` → `^3.18.2`。
+  背景：宿主 dsh 发布 `0.1.5-rc.1`（npm `next` dist-tag，2026-09-10），而 devDeps
+  停在 `0.1.2-alpha.5`——测试套件实际跑在旧宿主 API 上，与运行时脱节
+  （test-vs-runtime skew）。区间 `^0.1.5-rc.1`（`<0.2.0`）不收紧可用宿主范围，
+  仅把声明收敛到实测通过的那一版。
+- **chore**: `.gitignore` 补 `audit-report/`——repo-audit 生成产物，与 `lib/`/`*.log` 同类。
+- **test**: 宿主 0.1.5-rc.1 下验证链全绿——`build`/`typecheck` 零错误 + vitest 38/38 +
+  smoke 基线复现（A 7% / C 21% / D 50% / human-A 65% / human-C 71%）+
+  `check:deploy` FAIL 0。API 面核对：`defineTool`/`snapshotJsonValue`/
+  `z.string|object|const|union|array|boolean` 在 0.1.5-rc.1 均存在；`z.enum`/`z.record`
+  缺失与 `src/types.ts` 头部已记录的 schemastery 缺口一致，无需改码。
+
 ## 0.1.7 (2026-09-05)
 
 - **fix**: `dsh-scope`/`dsh-typert-protocol`/`dsh-util-values` 从 `dependencies` 移入

@@ -13,6 +13,7 @@
 5. **脱敏**：任何入库文件不得含 API Key/token/密码/本机绝对路径；`HANDOFF.md` 经 `.git/info/exclude` 保持私有。
 6. **回填闭环**：功能改动落地后同步更新 HANDOFF §2 快照；确认修复的坑迁 `HANDOFF-ARCHIVE/pits.md`，完成待办迁 `done.md`。
 7. **改动最小化**：不做任务范围外的顺手重构；发现范围外问题先入账（HANDOFF §3/§4）再继续。
+8. **环境指纹**：接手先跑 `bash ~/.agents/skills/project-handoff/scripts/handoff-lint.sh fp check`——不变则跳过环境复验，变了只复验变化维度；依赖变更后 `fp write` 刷新 `.handoff/fp.sha`。
 
 ## 完成的定义（DoD）
 

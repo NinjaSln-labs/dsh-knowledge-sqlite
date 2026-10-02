@@ -12,6 +12,7 @@ import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { SqliteKnowledgeStore } from './store.ts'
 import type { StoredItem } from './store.ts'
 import { QueryExpander } from './expand.ts'
@@ -34,12 +35,15 @@ export interface KnowledgeSqliteConfig {
   gating?: 'ask' | 'none'
   /** SQLite 数据库路径；默认 $DSH_HOME/knowledge.sqlite */
   databasePath?: string
-  /** probe 语料目录；默认 '<workspace>/research/memory-knowledge-seam/experiments/memory-experiment'（实验套件） */
+  /** probe 语料目录；默认包内 fixture `tests/fixtures/corpus/`（随包发布，import.meta.url 解析为绝对路径）；
+   *  显式相对路径按 workspace 解析，绝对路径原样使用 */
   corpusPath?: string
   /** seam 级写上限（V1.11 enrichment.maxContentTokens，默认 2048） */
   maxContentTokens?: number
   queryExpansion?: {
     enabled?: boolean
+    /** 专用扩展 provider（默认跟随会话默认；扩展低延迟任务不应跟随主模型路由，见 EXPERIMENTS §9） */
+    provider?: string
     model?: string
     maxOutputTokens?: number
     timeoutMs?: number
@@ -60,7 +64,7 @@ export interface ResolvedConfig {
   databasePath: string
   corpusPath: string
   maxContentTokens: number
-  queryExpansion: { enabled: boolean; model?: string; maxOutputTokens: number; timeoutMs: number; cache: boolean }
+  queryExpansion: { enabled: boolean; provider?: string; model?: string; maxOutputTokens: number; timeoutMs: number; cache: boolean }
   retrieval: { topN: number; maxQueryTrigrams: number; maxCandidates: number }
   authorization: { allowedGlobalWriters: string[] }
 }
@@ -68,6 +72,11 @@ export interface ResolvedConfig {
 export function defaultDbPath(): string {
   const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
   return join(home, 'knowledge.sqlite')
+}
+
+/** probe 语料默认目录：包内 fixture（lib/index.js → ../tests/fixtures/corpus），随包发布。 */
+export function defaultCorpusPath(): string {
+  return fileURLToPath(new URL('../tests/fixtures/corpus', import.meta.url))
 }
 
 // ---------- 服务 ----------
@@ -289,6 +298,7 @@ export class KnowledgeService extends Service {
       variants = e.variants
       if (e.degraded) degraded = 'lexical'
       expansion = { used: true, source: e.source, degraded: e.degraded, latencyMs: e.latencyMs, variantsCount: variants.length }
+      if (e.reason !== undefined) expansion.reason = e.reason
     } else if (variants !== null && variants.length > 0) {
       expansion = { used: true, source: 'caller', degraded: false, latencyMs: 0, variantsCount: variants.length }
     }
@@ -358,10 +368,11 @@ const knowledgeSqlitePlugin = {
       const resolved: ResolvedConfig = {
         gating: config.gating ?? 'ask',
         databasePath: config.databasePath ?? defaultDbPath(),
-        corpusPath: config.corpusPath ?? 'research/memory-knowledge-seam/experiments/memory-experiment',
+        corpusPath: config.corpusPath ?? defaultCorpusPath(),
         maxContentTokens: config.maxContentTokens ?? 2048,
         queryExpansion: {
           enabled: config.queryExpansion?.enabled ?? true,
+          provider: config.queryExpansion?.provider,
           model: config.queryExpansion?.model,
           maxOutputTokens: config.queryExpansion?.maxOutputTokens ?? 300,
           timeoutMs: config.queryExpansion?.timeoutMs ?? 3000,
@@ -380,6 +391,7 @@ const knowledgeSqlitePlugin = {
       ctx.effect(() => () => store.close())
       const expander = new QueryExpander(ctx, {
         enabled: resolved.queryExpansion.enabled,
+        provider: resolved.queryExpansion.provider,
         model: resolved.queryExpansion.model,
         maxOutputTokens: resolved.queryExpansion.maxOutputTokens,
         timeoutMs: resolved.queryExpansion.timeoutMs,

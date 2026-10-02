@@ -59,6 +59,7 @@ DSH 现有的全文检索使用 `unicode61`，无法匹配中文子串。在项�
     maxContentTokens: 2048
     queryExpansion:
       enabled: true
+      provider: ''                             # 未设置 = 会话默认 provider（pin 住可让低延迟扩展不跟随主模型路由）
       model: ''                                # 未设置 = 会话默认模型
       maxOutputTokens: 300
       timeoutMs: 3000   # 默认值（0.1.5 起）
@@ -69,7 +70,7 @@ DSH 现有的全文检索使用 `unicode61`，无法匹配中文子串。在项�
       maxCandidates: 200
     authorization:
       allowedGlobalWriters: []                 # 允许写入 global 范围的 agent/preset id
-    corpusPath: 'research/memory-knowledge-seam/experiments/memory-experiment'   # probe 语料根（相对工作区）
+    corpusPath: ''                           # probe 语料根；默认包内 `tests/fixtures/corpus/`（相对路径按工作区解析，绝对路径原样使用）
 ```
 
 ## 存储布局
@@ -84,7 +85,7 @@ DSH 现有的全文检索使用 `unicode61`，无法匹配中文子串。在项�
 ```sh
 npm install
 npm run build          # tsc（纯 TS，无需装饰器转换）
-npm test               # vitest：38 项（store 19 + service 19）
+npm test               # vitest：40 项（store 19 + service 21）
 node test-smoke.mjs    # SQLite 层冒烟：复现 A 7% / C 21% / D 50% / human-A 65% + 契约检查
 ```
 

@@ -3,24 +3,34 @@
 > 本文件由模板单源拼装（core + 分类 append）：发布通道/发布流程/应急发布由分类 append 决定；
 > 共性纪律在 core。
 
-## 发布状态（2026-09-05 更新）
+## 发布状态（2026-10-02 更新）
 
 | 项 | 状态 |
 |---|---|
-| npm | 0.1.6 latest（monorepo 末次）；单库化后首个版本 **v0.1.7 待发布** |
+| npm | **0.1.10 latest**（`knowledge-sqlite-v0.1.10` tag，0.1.9 → 0.1.10） |
 | GitHub | `NinjaSln-labs/dsh-knowledge-sqlite` main；发版 tag `knowledge-sqlite-v*` |
-| 本地验证 | 38/38 vitest 全绿 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）+ check:deploy FAIL 0 |
+| 本地验证 | 40/40 vitest 全绿 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）+ check:deploy FAIL 0 |
 
 ## 版本历史
 
 > 每版一行：**做了什么 + 为什么 + 怎么验证的**；重大教训展开写进当版条目。
 
-- **0.1.6** — 单库迁移收尾：部署纪律落地（check:deploy + pre-commit）、devDeps 全量宿主包补齐、生态规范对齐（keywords/files/author/README徽章/⭐段/topics）、Trusted Publisher 发布管道（OIDC publish.yml）；验证：38/38 test + smoke + check:deploy | 单库时代最后发布（0.1.7 尚未发版）
-- **0.1.5** — L1 扩展持久缓存（SQLite `expansion_cache` 表替代进程 Map）；reasoningEffort: 'off' 防止扩展跟随主模型切 reasoning 路由退化；验证：smoke 基线不变，首次 live 扩展落库实测
-- **0.1.4** — FTS5 trigram 检索 + L1 查询扩展；验证：RESULTS-v3 实验基线
-- **0.1.3** — 语料 hermetic 入库（fixture/corpus/）；验证：路径漂移回归测试
-- **0.1.2** — strict JSON 校验：-0/NaN 归一化、undefined 字段 omit；验证：契约检查 11/11
-- **0.1.1** — ask 门控 + global allowlist + workspace 隔离；验证：probe contract 套件
+- **0.1.10** — 宿主升级对齐 dsh `0.2.0-rc.2`（deps 全量 `^0.2.0-rc.2` + schemastery `~3.18.4`；
+  新增 devDeps `dsh-sandbox`/`dsh-sandbox-policy`——dsh-tools 直接 import，缺失即断）；
+  live L1 降级补结构化 reason 诊断（`expansion.reason` + `stats.degradeReasons`）；
+  `QueryExpansionConfig.provider` 死配置接通（扩展专用 provider pinning 生效）；
+  `knowledge_probe` 默认 corpusPath 指向包内 fixture（部署态套件不再 ENOENT）。
+  验证：40/40 vitest + smoke 基线不变 + check:deploy FAIL 0
+- **0.1.9** — 宿主升级对齐 `0.1.5-rc.1`（test-vs-runtime skew：devDeps 停在 alpha.5，测试跑在旧宿主 API 上）；验证：38/38 + smoke 基线不变 + check:deploy FAIL 0
+- **0.1.7** — 单库化后首个发布（monorepo → 独立仓库）：scaffold adopt `dsh-plugin` 模板、`dsh-scope` 等三包从 deps 移入 devDeps 防 profile 双套；验证：38/38 + smoke + check:deploy + contract 12/12
+- **0.1.6** — 扩展请求显式关闭思维链（`reasoningEffort: 'off'` → pi-ai `thinking: {type:'disabled'}`）；
+  根因：扩展跟随会话默认路由，主模型若为 reasoning 模型则 thinking 预热致 TTFT 3.4s / 总耗时 11.3s，
+  timeout 3000 下 100% 降级；部署配套 profile patch `queryExpansion.model: 'deepseek-v4-flash'`
+- **0.1.5** — L1 扩展持久缓存（SQLite `expansion_cache` 表替代进程 Map）；首次 live 扩展落库实测
+- **0.1.4** — FTS5 trigram 检索 + L1 查询扩展；RESULTS-v3 实验基线
+- **0.1.3** — 语料 hermetic 入库（fixture/corpus/）；路径漂移回归测试
+- **0.1.2** — strict JSON 校验：-0/NaN 归一化、undefined 字段 omit；契约检查 11/11
+- **0.1.1** — ask 门控 + global allowlist + workspace 隔离；probe contract 套件
 - **0.1.0** — V1.11 契约初始实现
 
 ## 发布后验证（共性纪律）

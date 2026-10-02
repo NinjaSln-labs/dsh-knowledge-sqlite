@@ -127,6 +127,8 @@ export interface KnowledgeSearchResult {
     degraded: boolean
     latencyMs: number
     variantsCount: number
+    /** 降级原因（诊断用；仅降级时存在，如 'timeout: 3000ms …' / 'stream-error: …' / 'no-route: …'）。 */
+    reason?: string
   }
 }
 

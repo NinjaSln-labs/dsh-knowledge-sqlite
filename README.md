@@ -61,6 +61,7 @@ Plugin row config (all optional, defaults are the V1.11 proposal defaults):
     maxContentTokens: 2048
     queryExpansion:
       enabled: true
+      provider: ''                             # unset = session default provider (pin here to keep low-latency extension off the main route)
       model: ''                                # unset = session default model
       maxOutputTokens: 300
       timeoutMs: 3000   # 默认值（0.1.5 起）
@@ -71,7 +72,7 @@ Plugin row config (all optional, defaults are the V1.11 proposal defaults):
       maxCandidates: 200
     authorization:
       allowedGlobalWriters: []                 # agent/preset ids allowed to write global scope
-    corpusPath: 'research/memory-knowledge-seam/experiments/memory-experiment'   # probe corpus base (relative to workspace)
+    corpusPath: ''                           # probe corpus base; default = bundled `tests/fixtures/corpus/` (relative → workspace, absolute → as-is)
 ```
 
 ## Storage layout
@@ -86,7 +87,7 @@ Plugin row config (all optional, defaults are the V1.11 proposal defaults):
 ```sh
 npm install
 npm run build          # tsc（纯 TS，无需装饰器转换）
-npm test               # vitest：38 项（store 19 + service 19）
+npm test               # vitest：40 项（store 19 + service 21）
 node test-smoke.mjs    # SQLite 层冒烟：复现 A 7% / C 21% / D 50% / human-A 65% + 契约检查
 ```
 

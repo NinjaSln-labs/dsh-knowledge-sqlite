@@ -233,7 +233,7 @@ latencyMs 是完整调用时长而非首包；且未核对实际路由。curl �
   **网关物理 TTFT ~2s 未解**；human fresh L1-live 59% 无退化
 - 缓存兜底不变：命中查询 0 延迟零降级（§8）
 
-### 9.3 悬而未决（交接 HANDOFF.md §3 决策项，本地私有，未追踪）
+### 9.3 悬而未决（交接见 `.handoff/` actions t000001，本地私有，未追踪）
 
 - 决策 A/B：接受网关 TTFT ~2s vs 0.1.7 加 `queryExpansion.provider` 走官方直连（107ms）；
   用户此前倾向不直连官方（「官方也可能思维链全开」）——已被本节 curl 实测排除，待用户拍板

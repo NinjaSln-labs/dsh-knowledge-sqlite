@@ -10,6 +10,10 @@
  *
  * 消息构造遵循 harness 约定（content blocks + source + id）——原型曾因字符串 content
  * 与 finish reason 字符串比较导致全部降级（见 research/memory-knowledge-seam/experiments/prototype/RESULTS-PROTOTYPE.md §4.4）。
+ *
+ * 诊断（0.1.10）：降级不再是静默空手而归——`callModel` 返回结构化 reason（路由缺失 /
+ * selection 抛错 / 无 llm 服务 / 超时 / 流错误），`expand()` 记录到 `stats.lastDegradeReason`
+ * 与 `stats.degradeReasons` 计数、经 `ctx.logger` 告警，并把 reason 透出到 `ExpansionOutcome`。
  */
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -18,12 +22,14 @@ export interface ExpansionOutcome {
   source: 'live' | 'cache' | null
   degraded: boolean
   latencyMs: number
+  /** 降级原因（诊断用；仅 degraded:true 时存在）。 */
+  reason?: string
 }
 
 export interface QueryExpansionConfig {
   enabled: boolean
   /** 专用扩展 provider（0.1.6：显式指定，优先级高于会话默认 provider——扩展是低延迟任务，
-   *  不应跟随主模型路由（中转/推理模型 TTFT 可达 3s+，见 EXPERIMENTS §9）） */
+   *  不应跟随主模型路由（中转/推理模型 TTFT 可达 3s+，见 EXPERIMENTS §9）；0.1.10 起 callModel 实际读取） */
   provider?: string
   /** 专用扩展模型（V1.11：unset = 会话默认模型） */
   model?: string
@@ -45,7 +51,17 @@ const EXPANSION_PROMPT = '你是记忆系统的查询扩展器。对用户输入
 export class QueryExpander {
   private readonly cache = new Map<string, string[]>()
   private msgSeq = 0
-  stats = { calls: 0, cacheHits: 0, persistHits: 0, degraded: 0, totalLatencyMs: 0 }
+  stats = {
+    calls: 0,
+    cacheHits: 0,
+    persistHits: 0,
+    degraded: 0,
+    totalLatencyMs: 0,
+    /** 降级原因首段 → 次数（诊断；probe 的 expansion-stats 会展开）。 */
+    degradeReasons: {} as Record<string, number>,
+    /** 最近一次降级原因（含细节）。 */
+    lastDegradeReason: null as string | null,
+  }
 
   constructor(
     private readonly ctx: Context,
@@ -88,14 +104,10 @@ export class QueryExpander {
     const outcome = await this.callModel(query, signal)
     const latencyMs = Date.now() - started
     this.stats.totalLatencyMs += latencyMs
-    if (!outcome.ok) {
-      this.stats.degraded++
-      return { variants: [], source: null, degraded: true, latencyMs }
-    }
+    if (!outcome.ok) return this.degrade(outcome.reason, latencyMs)
     const variants = parseVariants(outcome.text)
     if (variants.length === 0) {
-      this.stats.degraded++
-      return { variants: [], source: null, degraded: true, latencyMs }
+      return this.degrade(`empty-variants: raw=${JSON.stringify(outcome.text).slice(0, 200)}`, latencyMs)
     }
     if (this.config.cache) {
       this.cache.set(norm, variants)
@@ -104,22 +116,37 @@ export class QueryExpander {
     return { variants, source: 'live', degraded: false, latencyMs }
   }
 
-  private async callModel(query: string, signal?: AbortSignal): Promise<{ ok: true; text: string } | { ok: false }> {
-    // 模型路由：配置了专用扩展模型时用它（provider 跟随会话路由）；
-    // 未配置用会话默认模型（agentDefaultModel.currentSelection）
+  /** 记录一次降级：计数 + 日志 + 结构化 reason（诊断；不改变降级语义）。 */
+  private degrade(reason: string, latencyMs: number): ExpansionOutcome {
+    this.stats.degraded++
+    this.stats.lastDegradeReason = reason
+    const key = reason.split(':', 1)[0]
+    this.stats.degradeReasons[key] = (this.stats.degradeReasons[key] ?? 0) + 1
+    this.ctx.logger('dsh-knowledge-sqlite').warn('L1 query expansion degraded — %s', reason)
+    return { variants: [], source: null, degraded: true, latencyMs, reason }
+  }
+
+  private async callModel(query: string, signal?: AbortSignal): Promise<{ ok: boolean; text: string; reason: string }> {
+    // 模型路由：provider 优先取专用扩展 provider（QueryExpansionConfig.provider，0.1.10 起生效），
+    // 否则跟随会话默认；model 优先取专用扩展模型，否则会话默认。
     const sel = this.ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } } | undefined
-    let provider: string | undefined
-    let model: string | undefined
+    if (sel === undefined) return { ok: false, text: '', reason: 'no-agentDefaultModel-service' }
+    let sessionProvider: string | undefined
+    let sessionModel: string | undefined
     try {
-      const s = sel?.currentSelection()
-      provider = s?.provider
-      model = this.config.model ?? s?.model
-    } catch {
-      provider = undefined
+      const s = sel.currentSelection()
+      sessionProvider = s?.provider
+      sessionModel = s?.model
+    } catch (error) {
+      return { ok: false, text: '', reason: `selection-threw: ${error instanceof Error ? error.message : String(error)}` }
     }
-    if (provider === undefined || model === undefined) return { ok: false }
+    const provider = this.config.provider ?? sessionProvider
+    const model = this.config.model ?? sessionModel
+    if (provider === undefined || model === undefined) {
+      return { ok: false, text: '', reason: `no-route: provider=${provider ?? '-'} model=${model ?? '-'} session=${sessionProvider ?? '-'}/${sessionModel ?? '-'}` }
+    }
     const llm = this.ctx.get('llm') as { stream(options: unknown): AsyncIterable<{ type: string; text?: string; reason?: { kind: string; failure?: { message?: string } } }> } | undefined
-    if (llm === undefined) return { ok: false }
+    if (llm === undefined) return { ok: false, text: '', reason: 'no-llm-service' }
     let text = ''
     let streamError: string | null = null
     const collect = (async (): Promise<void> => {
@@ -153,9 +180,9 @@ export class QueryExpander {
       }
     })()
     const timedOut = await this.raceWithTimeout(collect)
-    if (timedOut) return { ok: false }
-    if (streamError !== null) return { ok: false }
-    return { ok: true, text }
+    if (timedOut) return { ok: false, text: '', reason: `timeout: ${this.config.timeoutMs}ms (provider=${provider} model=${model})` }
+    if (streamError !== null) return { ok: false, text: '', reason: `stream-error: ${streamError}` }
+    return { ok: true, text, reason: '' }
   }
 
   /** 与超时竞速（timer 服务：宿主 fiber 计时器，插件停止时自动清理）。collect 先完成 → false；超时 → true。 */

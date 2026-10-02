@@ -1,5 +1,31 @@
 # CHANGELOG — dsh-knowledge-sqlite
 
+## 0.1.10 (2026-10-02)
+
+- **chore(deps)**: 宿主升级对齐 dsh `0.2.0-rc.2`（npm `next`，宿主 `dsh --version`
+  实测）——`peer/devDeps` `@deepseek-ai/dsh-*`（tools/llm/session/agent-default-model/
+  api-remotes/fs-local/scope/typert-protocol/util-values）统一到 `^0.2.0-rc.2`，
+  `@deepseek-ai/schemastery` `^3.18.2` → `~3.18.4`（对齐 compass）。
+  新增 devDeps `@deepseek-ai/dsh-sandbox` + `dsh-sandbox-policy@0.2.0-rc.2`
+  （dsh-tools 0.2.0-rc.2 的 lib/index.js 直接 import，缺之测试 `Cannot find package`；
+  已实测：移除即复现，属运行时可达的传递依赖，必须显式声明）。
+  API 增量（deferLoading/projectContent）只加可选字段，`defineTool` 调用无需改动。
+- **fix**: live L1 扩展降级补诊断（发现1）——`callModel` 返回结构化 reason
+  （`no-agentDefaultModel-service` / `selection-threw` / `no-route` / `no-llm-service` /
+  `timeout` / `stream-error` / `empty-variants`），经 `ctx.logger` 告警、记入
+  `stats.lastDegradeReason` 与 `stats.degradeReasons` 计数，并透出到 `knowledge_search`
+  结果的 `expansion.reason`。此前整条扩展路径静默降级（无日志），100% 降级无从定位。
+- **fix**: `QueryExpansionConfig.provider` 死配置接通（发现3）——`callModel` 实际读取该字段、
+  `index.ts` 解析并透传（config → resolved → QueryExpander）。EXPERIMENTS §9 建议的
+  「扩展专用 provider pinning」自此可真正生效（此前声明了但从不被读取）。
+- **fix**: `knowledge_probe` 默认 `corpusPath` 指向包内 fixture（发现2）——新增
+  `defaultCorpusPath()` 经 `import.meta.url` 解析 `tests/fixtures/corpus/`，`files` 已含该目录
+  （随包发布）。部署态 `seed`/`hard`/`human`/`latency` 套件不再 ENOENT（此前默认指已消失的
+  `research/memory-knowledge-seam/experiments/memory-experiment`）。
+- **test**: +2（provider pinning 生效；默认语料路径解析且 522 条 seed 成功）；超时/失败降级用例
+  补 `expansion.reason` 断言 → vitest 40/40。
+- **docs**: README/README.zh 配置示例补 `queryExpansion.provider` 与 corpusPath 默认说明。
+
 ## 0.1.9 (2026-09-10)
 
 - **chore(deps)**: 宿主升级对齐——`peerDependencies` 与 `devDependencies` 中的

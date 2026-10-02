@@ -207,16 +207,19 @@ describe('V1.11 契约（服务方法）', () => {
   })
 
   it('L1 超时降级：degraded=lexical 而非报错', async () => {
-    app = await boot({ agent, llmTimeoutMs: 500 })
+    app = await boot({ agent, llmTimeoutMs: 500, queryExpansion: { timeoutMs: 100 } })
     const r = await app.service.search('超时降级测试', {})
     expect(r.degraded).toBe('lexical')
     expect(r.hits).toBeDefined()
+    // 诊断：降级原因透出（发现1 收口——此前静默无日志）
+    expect(r.expansion?.reason).toMatch(/^timeout: 100ms/)
   })
 
   it('llm 失败降级：degraded=lexical', async () => {
     app = await boot({ agent, llmFail: true })
     const r = await app.service.search('失败降级测试', {})
     expect(r.degraded).toBe('lexical')
+    expect(r.expansion?.reason).toMatch(/^stream-error: /)
   })
 
   it('budget 截断：maxItems / maxTokens', async () => {
@@ -319,9 +322,31 @@ describe('L1 扩展专用路由（0.1.6：关思维链 + 显式模型）', () =>
     expect(app.llmCalls[0].model).toBe('deepseek-v4-flash')
     expect(app.llmCalls[0].reasoningEffort).toBe('off')
   })
+
+  it('queryExpansion.provider 显式配置接管会话 provider（0.1.10 专用 provider pinning 生效）', async () => {
+    app = await boot({ agent, queryExpansion: { provider: 'pinned-provider' } })
+    await app.service._seedWrite({ content: '路由测试 记忆条目三', dedupeKey: 'route-3' },
+      { workspaceId: '/ws/one', ownerId: 'sess-1', authorTier: 'explicit' })
+    const s = await app.service.search('路由测试怎么搜', {})
+    expect(s.expansion?.used).toBe(true)
+    expect(app.llmCalls[0].provider).toBe('pinned-provider')
+    // model 未 pin → 仍跟随会话默认模型
+    expect(app.llmCalls[0].model).toBe('mock-model')
+    expect(app.llmCalls[0].reasoningEffort).toBe('off')
+  })
 })
 
 describe('probe（实验套件）', () => {
+  it('corpusPath 默认解析为包内 fixture（部署态 probe 不再 ENOENT）', { timeout: 30000 }, async () => {
+    app = await boot({ agent }) // 不传 corpusPath → defaultCorpusPath()
+    const seed = await app.service.probe('seed')
+    expect(seed.ok).toBe(true)
+    const part = seed.parts[0] as { ok: boolean; distractors: number; corpusBase: string }
+    expect(part.ok).toBe(true)
+    expect(part.distractors).toBe(500)
+    expect(part.corpusBase).toContain(join('tests', 'fixtures', 'corpus'))
+  })
+
   it('seed → eval-hard 确定性臂（A 7% / C 21% / D 50%）', { timeout: 30000 }, async () => {
     app = await boot({ agent, corpusPath: CORPUS })
     const seed = await app.service.probe('seed')

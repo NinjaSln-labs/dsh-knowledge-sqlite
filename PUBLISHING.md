@@ -9,6 +9,7 @@
 |---|---|
 | npm | **0.1.10 latest**（`knowledge-sqlite-v0.1.10` tag，0.1.9 → 0.1.10） |
 | GitHub | `NinjaSln-labs/dsh-knowledge-sqlite` main；发版 tag `knowledge-sqlite-v*` |
+| profile | `web` 已装 `dsh-knowledge-sqlite@0.1.10`（registry `^0.1.10`，非 `file:`）；宿主 dsh `0.2.0-rc.2` 下 cordis boot + `probe seed` 实测通过 |
 | 本地验证 | 40/40 vitest 全绿 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）+ check:deploy FAIL 0 |
 
 ## 版本历史

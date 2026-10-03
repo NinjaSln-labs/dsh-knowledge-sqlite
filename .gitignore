@@ -8,6 +8,11 @@ audit-report/
 .scaffold-merge/
 .scaffold/conflicts/
 
+# 交接存储（本机私有，不入库；旧布局 HANDOFF.md / HANDOFF-ARCHIVE/ 同规则）
+.handoff/
+HANDOFF.md
+HANDOFF-ARCHIVE/
+
 # Orca ADE（本机配置，不入仓）
 orca.yaml
 .worktreeinclude

@@ -500,3 +500,87 @@ D1 的实测代价（cap 24 vs cap 0 的 p95 差值）：
 - **但启用 cap 的实现路径有性能缺陷**（D1）⇒ 默认值从 0 改 24 须与 D1 修复同批做，
   否则把 O(N) 扫描带进生产路径；
 - 修复项另开待办（见 `.handoff/`），本轮**不改 `src/`**。
+
+## 13. 延迟门禁复验（2026-10-30，t000004 闭环）
+
+> 可复现脚本：`node scripts/latency-gate.mjs`（4 路并发口径，DESIGN:246 口径）
+> `node scripts/latency-serial.mjs`（串行口径，绕 RPM 限流）
+> 非 hermetic（真实 LLM 调用）⇒ **不进 verify 链 / CI**，人工触发。
+
+### 13.1 门禁口径（DESIGN:246）
+
+> P95 L1 search latency ≤ 2.0s on the human query suite under 4-way concurrent load;
+> `degraded: 'lexical'` fallback queries are excluded from p95.
+
+实现见 `src/probe.ts:84` `latency()`：human 集 17 条有目标查询、4 路并发、
+排除降级查询后取 p95，`gate = p95 ≤ 2000`。
+
+### 13.2 复验结果：门禁 FAIL（三个 provider）
+
+**并发口径（4 路，timeoutMs 3000）**
+
+| provider | 有效样本 p95 | 降级 | 门禁 |
+|---|---|---|---|
+| sensenova-6.8-flash-lite | 2878ms（第 1 轮） | 13/17 | **FAIL** |
+| sensenova（第 2/3 轮） | null（无有效样本） | 17/17 | 不可判定 |
+| agnes-3.0-flash | null | 17/17 | 不可判定 |
+| cloudflare gpt-oss-20b | 2889ms | 11/17 | **FAIL** |
+
+**串行口径（无排队，绕 RPM 限流，timeoutMs 5000/8000）**
+
+| provider | 成功 | 延迟（min / p50 / p95 / max） | 门禁 |
+|---|---|---|---|
+| sensenova-6.8-flash-lite | 13/17 | **2321** / 3408 / 6502 / 6502 ms | **FAIL** |
+| cloudflare gpt-oss-20b | 9/17 | 1978 / 3012 / 4734 / 4734 ms | **FAIL** |
+
+⇒ **门禁不通过，且不是并发或限流造成的**：串行口径下**最慢的那条成功请求也 > 2.0s**
+（sensenova min=2321ms）⇒ 单条扩展本身已超 SLO。
+
+### 13.3 三个环境变量：免费 provider 的 RPM 限流
+
+并发口径下大量查询在 **40–120ms** 内降级，原因是 provider 限流，不是延迟：
+
+- sensenova：`429 {"message":"rpm exhausted","type":"quota_exceeded_error","code":"8"}`
+- agnes：`429 ... You've reached the API rate limit for free users`（明确提示免费额度耗尽）
+- cloudflare：无 RPM 限流，但有 `Connection error`（流式连接不稳）
+
+⇒ **降级 ≠ 慢**。probe 把限流也记为降级并排除在 p95 外 ⇒ p95=null 时**门禁不可判定**
+（不是「通过」）。这是本轮测量的最大干扰项。
+
+**连带效应（缓存雪崩）**：降级与 `empty-variants` 都**不写缓存**（`src/expand.ts:116,119`
+提前 return）⇒ provider 不可用期间缓存永远填不上 ⇒ 后续「cached 口径」实测也是 17/17
+降级（而非设计中的 0 延迟命中）。这是设计正确的副作用（不该缓存失败结果），但意味着
+**provider 可用性是延迟门禁的前置条件**。
+
+### 13.4 顺带发现：reasoning 模型的 `empty-variants` 截断（t000001 修复的盲区）
+
+cloudflare gpt-oss-20b 上 7/17 降级为 `empty-variants`，raw 形如
+`{"variants": ["在业界和学术界，是否有更激进的文件式方案，能够同时避免全量`——**JSON 被截断**。
+
+根因：`maxOutputTokens` 默认 **300**（`src/index.ts:377`）是**总输出预算**；reasoning 模型
+的思维链（实测 46–67 个 reasoning-delta chunk）吃光预算 ⇒ 正式输出被截断 ⇒ 解析失败。
+
+对照实验（长查询 h3/h6/h9）：
+
+| provider | 类型 | maxTokens 300 | maxTokens 600 |
+|---|---|---|---|
+| cloudflare gpt-oss-20b | reasoning | h3 OK，h6/h9 **截断** | 全部 OK |
+| sensenova-6.8-flash-lite | 非 reasoning | **全部 OK** | 全部 OK |
+
+⇒ **这是 reasoning 模型专属问题**，非 reasoning 模型在 300 下正常。
+⇒ t000001 的修复只处理了「带 `off` 被拒 ⇒ 去参重试」，**没覆盖「去参后思维链吃预算 ⇒
+输出截断」**这条路径（gpt-oss-20b 不支持 `reasoningEffort: 'off'` ⇒ 必然走该路径）。
+
+### 13.5 结论与口径修订建议
+
+1. **门禁在当前 provider/模型组合下不通过**：串行口径 min=2321ms 已超 2000ms。
+   这与 EXP §8.2（2026-08）的结论一致——「调参不能对抗网络/模型延迟」；DESIGN 说的
+   「timeoutMs 2.5s 给 SLO 留余量」在今天也不成立（真实延迟已超 timeout）。
+2. **可用 provider 均不满足 2.0s 门禁**：sensenova 直连 2.3–6.5s、cloudflare 2.0–4.7s。
+   需要**更快的扩展模型**（如更小的非 reasoning 模型）才可能达标，而非调 timeout。
+3. **门禁口径需修订**（§8.2 已建议，本轮再次确认）：当前口径把「provider 限流」
+   （环境变量）与「模型延迟」（实现属性）混在一起 ⇒ 建议改为：
+   - 明确**排除 provider 错误类降级**（限流/连接错误），只计 timeout（真慢）与 empty-variants（真坏）；
+   - 或把门禁声明为**环境变量**（"在 provider X + 模型 Y 下"），本轮数据即声明基线。
+4. **§13.4 的截断缺陷应独立修复**（与门禁口径无关）：reasoning 模型路径需更大的
+   `maxOutputTokens`，或对 `empty-variants` 做一次重试（带更大预算）。

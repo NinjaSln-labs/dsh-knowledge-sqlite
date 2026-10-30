@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **docs**: 延迟门禁复验（t000004 闭环，EXPERIMENTS §13）——**未改 `src/`**，纯度量。
+  可复现脚本 `scripts/latency-gate.mjs`（DESIGN:246 并发口径）+ `scripts/latency-serial.mjs`
+  （串行口径，绕 RPM 限流）；非 hermetic（真实 LLM 调用），不进 CI verify 链。
+  关键发现：
+  - **门禁 FAIL，且不是并发或限流造成的**：串行口径下最慢的那条**成功**请求也 > 2.0s
+    （sensenova min=2321ms / p50 3408ms / p95 6502ms；cloudflare gpt-oss-20b
+    min=1978ms / p95 4734ms）⇒ 单条扩展本身已超 SLO。需**更快的扩展模型**才可能达标，
+    调 timeout 无效（与 EXPERIMENTS §8.2「调参不能对抗延迟」一致；DESIGN 说的
+    「timeoutMs 2.5s 给 SLO 留余量」今天也不成立）。
+  - **免费 provider 的 RPM 限流是最大测量干扰**：sensenova `429 rpm exhausted`、agnes
+    `429 You've reached the API rate limit for free users`；限流在 40–120ms 内返回，
+    **降级 ≠ 慢**。probe 排除降级后 p95=null ⇒ 门禁**不可判定**（不是「通过」）。
+    连带效应：降级与 empty-variants 都不写缓存 ⇒ provider 不可用期间缓存永远填不上
+    （实测「cached 口径」也 17/17 降级，而非设计中的 0 延迟命中）。
+  - **顺带发现 reasoning 模型的 `empty-variants` 截断**（t000001 修复的盲区）：cloudflare
+    gpt-oss-20b 7/17 降级为 JSON 截断——`maxOutputTokens` 默认 300 是**总输出预算**，
+    reasoning 模型思维链（实测 46–67 个 reasoning-delta chunk）吃光预算 ⇒ 正式输出被截断。
+    对照：sensenova（非 reasoning）在 300 下全部正常 ⇒ reasoning 模型专属问题。
+  - **门禁口径待修订**（§8.2 已建议）：当前把「provider 限流」（环境变量）与「模型延迟」
+    （实现属性）混在一起 ⇒ 建议排除 provider 错误类降级，或把门禁声明为环境变量
+    （"在 provider X + 模型 Y 下"）。
 - **docs**: 查询截断（maxQueryTrigrams）度量与实现缺陷清单（t000003 闭环，EXPERIMENTS §12）
   ——**未改 `src/`**，纯度量。可复现脚本 `scripts/cap-measure.mjs`（hermetic，不进 CI
   verify 链）。关键发现：

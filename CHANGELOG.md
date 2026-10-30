@@ -1,5 +1,23 @@
 # CHANGELOG — dsh-knowledge-sqlite
 
+## Unreleased
+
+- **fix**: L1 扩展按模型能力自适应 `reasoningEffort`（t000001 真因修复）——此前
+  扩展请求硬编码 `reasoningEffort: 'off'`，而宿主对**无 reasoning 能力**的模型会硬拒该参数
+  （`UNSUPPORTED_REASONING_EFFORT`）⇒ 扩展 100% 降级、检索退化为纯词法。真机实测
+  （sensenova-6.8-flash-lite / agnes-3.0-flash 均属此类）：带 `off` 即被拒，
+  `expansion.reason` 为 `stream-error: ... does not support reasoning effort "off"`。
+  0.1.6 的修复只验证过 reasoning 模型一侧（`reasoning:true` catalog），未覆盖这一侧。
+  ⇒ 改为「先带 `off`；被拒则去掉该参数重试一次」。该拒绝发生在宿主**本地校验**
+  （不发 provider 请求、零成本），故重试不产生额外调用；未被拒的模型本就支持
+  reasoning，保留 `off` 以关闭思维链（thinking 预热致 TTFT 3s+，EXPERIMENTS §9）——
+  两类模型各自走对分支。**注意顺序**：不能反过来（先不带）——宿主对支持 reasoning
+  的模型在未指定时按 `defaultEffort` 处理而不报错，反序会让 reasoning 模型永久丢掉
+  「关思维链」的收益。
+- **test**: +3（宿主拒 `reasoningEffort` → 去参重试即通不降级；宿主接受 → 单次调用
+  不重试；非 reasoning-effort 类错误不触发重试）→ vitest 43/43。
+- **docs**: EXPERIMENTS §9.3「悬而未决」改写为 §9.4「真因定位与修复」，附真机证据链。
+
 ## 0.1.10 (2026-10-02)
 
 - **chore(deps)**: 宿主升级对齐 dsh `0.2.0-rc.2`（npm `next`，宿主 `dsh --version`

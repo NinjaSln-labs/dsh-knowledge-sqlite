@@ -3,19 +3,29 @@
 > 本文件由模板单源拼装（core + 分类 append）：发布通道/发布流程/应急发布由分类 append 决定；
 > 共性纪律在 core。
 
-## 发布状态（2026-10-02 更新）
+## 发布状态（2026-10-30 更新）
 
 | 项 | 状态 |
 |---|---|
 | npm | **0.1.10 latest**（`knowledge-sqlite-v0.1.10` tag，0.1.9 → 0.1.10） |
 | GitHub | `NinjaSln-labs/dsh-knowledge-sqlite` main；发版 tag `knowledge-sqlite-v*` |
-| profile | `web` 已装 `dsh-knowledge-sqlite@0.1.10`（registry `^0.1.10`，非 `file:`）；宿主 dsh `0.2.0-rc.2` 下 cordis boot + `probe seed` 实测通过 |
-| 本地验证 | 40/40 vitest 全绿 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）+ check:deploy FAIL 0 |
+| profile | `web` 已改 `file:` 安装（指向本仓库根）——**因 0.1.11 未发版**：L1 扩展真因修复改了 `src/`，同版本号不同内容会让 registry 包失效；发 0.1.11 后可切回 registry `^0.1.11` |
+| 本地验证 | 43/43 vitest 全绿 + smoke 基线复现（A 7%/C 21%/D 50%/human-A 65%）+ check:deploy FAIL 0（`file:` 安装） |
+
+> 未发版期间的 profile 状态是**临时**的：`file:` 安装让部署态跟住源码；一旦发版即切回 registry。
+
 
 ## 版本历史
 
 > 每版一行：**做了什么 + 为什么 + 怎么验证的**；重大教训展开写进当版条目。
 
+- **0.1.11（未发版 · 待发）** — L1 扩展按模型能力自适应 `reasoningEffort`：真机定位降级真因为
+  扩展硬编码 `reasoningEffort: 'off'`，而宿主对**无 reasoning 能力**的模型（sensenova/agnes）
+  硬拒该参数 ⇒ 扩展 100% 降级、检索退化为纯词法（0.1.6 的修复只验证过 reasoning 型一侧）；
+  改为「先带 `off`，被 `UNSUPPORTED_REASONING_EFFORT` 拒则去参重试一次」——该拒绝在宿主
+  **本地校验**（0ms、不发请求、零成本），两类模型各自走对分支。
+  验证：43/43 vitest + smoke 基线不变 + check:deploy FAIL 0（`file:` 安装）+ 真机
+  （sensenova-6.8-flash-lite 真实调用）`expansion.source="live"` / `degraded=false` / 4 variants
 - **0.1.10** — 宿主升级对齐 dsh `0.2.0-rc.2`（deps 全量 `^0.2.0-rc.2` + schemastery `~3.18.4`；
   新增 devDeps `dsh-sandbox`/`dsh-sandbox-policy`——dsh-tools 直接 import，缺失即断）；
   live L1 降级补结构化 reason 诊断（`expansion.reason` + `stats.degradeReasons`）；

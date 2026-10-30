@@ -14,6 +14,12 @@
  * 诊断（0.1.10）：降级不再是静默空手而归——`callModel` 返回结构化 reason（路由缺失 /
  * selection 抛错 / 无 llm 服务 / 超时 / 流错误），`expand()` 记录到 `stats.lastDegradeReason`
  * 与 `stats.degradeReasons` 计数、经 `ctx.logger` 告警，并把 reason 透出到 `ExpansionOutcome`。
+ *
+ * 能力自适应（0.1.11）：`reasoningEffort: 'off'` 改为「先带、被拒再去掉重试」。
+ * 宿主对**无 reasoning 能力**的模型会硬拒该参数（UNSUPPORTED_REASONING_EFFORT）⇒ 扩展
+ * 100% 降级（实测 sensenova/agnes）；而对 reasoning 模型又必须显式关闭思维链（thinking 预热
+ * 致 TTFT 3s+，§9）。该拒绝发生在宿主本地校验（不发 provider 请求）⇒ 被拒即证明模型无
+ * reasoning 能力，去掉参数重试即通；未被拒的模型本就支持 reasoning，保留 'off' 各自走对分支。
  */
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -47,6 +53,9 @@ export interface ExpansionCacheStore {
 
 const EXPANSION_PROMPT = '你是记忆系统的查询扩展器。对用户输入的查询，生成 3-4 个同义/口语化/更具体的变体问法（中文），'
   + '用于检索同义改写。只输出 JSON：{"variants": ["变体1", "变体2", ...]}，不要输出其他内容。'
+
+/** 宿主拒绝「模型不支持该 reasoning effort」的错误码（dsh-llm seam 的 UNSUPPORTED_REASONING_EFFORT）。 */
+const UNSUPPORTED_REASONING_EFFORT = 'UNSUPPORTED_REASONING_EFFORT'
 
 export class QueryExpander {
   private readonly cache = new Map<string, string[]>()
@@ -145,33 +154,55 @@ export class QueryExpander {
     if (provider === undefined || model === undefined) {
       return { ok: false, text: '', reason: `no-route: provider=${provider ?? '-'} model=${model ?? '-'} session=${sessionProvider ?? '-'}/${sessionModel ?? '-'}` }
     }
-    const llm = this.ctx.get('llm') as { stream(options: unknown): AsyncIterable<{ type: string; text?: string; reason?: { kind: string; failure?: { message?: string } } }> } | undefined
+    const llm = this.ctx.get('llm') as { stream(options: unknown): AsyncIterable<{ type: string; text?: string; reason?: { kind: string; failure?: { message?: string; code?: string } } }> } | undefined
     if (llm === undefined) return { ok: false, text: '', reason: 'no-llm-service' }
+    // 扩展请求带 reasoningEffort:'off'；宿主对**无 reasoning 能力**的模型会硬拒该参数
+    // （UNSUPPORTED_REASONING_EFFORT）⇒ 扩展 100% 降级（0.1.11 实测 sensenova/agnes）。
+    // 该拒绝发生在宿主本地校验（不发 provider 请求、零成本）⇒ 被拒即证明模型无 reasoning 能力，
+    // 此时去掉该参数重试一次即通；未被拒的模型本就支持 reasoning，保留 'off' 以关闭思维链
+    // （thinking 预热可让 TTFT 高达 3s+：实测 opencode-go deepseek-v4-flash 默认 thinking 全开，
+    // TTFT 3387ms / total 11.3s，见 EXPERIMENTS §9）。
+    const attempt = await this.streamOnce(llm, { provider, model, query, signal, reasoningEffort: 'off' })
+    if (attempt.ok) return { ok: true, text: attempt.text, reason: '' }
+    if (attempt.code === UNSUPPORTED_REASONING_EFFORT) {
+      const retry = await this.streamOnce(llm, { provider, model, query, signal, reasoningEffort: undefined })
+      if (retry.ok) return { ok: true, text: retry.text, reason: '' }
+      return { ok: false, text: '', reason: retry.reason }
+    }
+    return { ok: false, text: '', reason: attempt.reason }
+  }
+
+  /**
+   * 单次流式调用：收集文本；失败时带回宿主错误码（用于判定是否值得重试）与结构化 reason。
+   * reason 前缀在此处定型（timeout / stream-error），调用方不再二次包装。
+   */
+  private async streamOnce(
+    llm: { stream(options: unknown): AsyncIterable<{ type: string; text?: string; reason?: { kind: string; failure?: { message?: string; code?: string } } }> },
+    args: { provider: string; model: string; query: string; signal?: AbortSignal; reasoningEffort?: 'off' },
+  ): Promise<{ ok: boolean; text: string; message: string; reason: string; code?: string }> {
     let text = ''
     let streamError: string | null = null
+    let streamCode: string | undefined
     const collect = (async (): Promise<void> => {
       try {
         const stream = llm.stream({
-          provider,
-          model,
+          provider: args.provider,
+          model: args.model,
           messages: [{
             role: 'user',
-            content: [{ type: 'text', text: `${EXPANSION_PROMPT}\n查询：${query}` }],
+            content: [{ type: 'text', text: `${EXPANSION_PROMPT}\n查询：${args.query}` }],
             source: { kind: 'plugin', plugin: 'dsh-knowledge-sqlite' },
             id: `knl-expand-${this.msgSeq++}`,
           }],
           maxTokens: this.config.maxOutputTokens,
           temperature: 0.2,
-          // 0.1.6：扩展是低延迟任务，显式关闭思维链——reasoning 模型的 thinking 预热
-          // 可让 TTFT 高达 3s+（实测 opencode-go deepseek-v4-flash 默认 thinking 全开，
-          // TTFT 3387ms / total 11.3s，见 EXPERIMENTS §9）；'off' → pi-ai
-          // `thinking: { type: 'disabled' }`，退化为普通生成。
-          reasoningEffort: 'off',
-          signal,
+          ...(args.reasoningEffort === undefined ? {} : { reasoningEffort: args.reasoningEffort }),
+          signal: args.signal,
         })
         for await (const chunk of stream) {
           if (chunk.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text
           if (chunk.type === 'finish' && (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted')) {
+            streamCode = chunk.reason.failure?.code
             throw new Error(`expansion stream ${chunk.reason.kind}: ${chunk.reason.failure?.message ?? 'unknown failure'}`)
           }
         }
@@ -180,9 +211,20 @@ export class QueryExpander {
       }
     })()
     const timedOut = await this.raceWithTimeout(collect)
-    if (timedOut) return { ok: false, text: '', reason: `timeout: ${this.config.timeoutMs}ms (provider=${provider} model=${model})` }
-    if (streamError !== null) return { ok: false, text: '', reason: `stream-error: ${streamError}` }
-    return { ok: true, text, reason: '' }
+    if (timedOut) {
+      const reason = `timeout: ${this.config.timeoutMs}ms (provider=${args.provider} model=${args.model})`
+      return { ok: false, text: '', message: reason, reason }
+    }
+    if (streamError !== null) {
+      return {
+        ok: false,
+        text: '',
+        message: streamError,
+        reason: `stream-error: ${streamError}`,
+        ...(streamCode === undefined ? {} : { code: streamCode }),
+      }
+    }
+    return { ok: true, text, message: '', reason: '' }
   }
 
   /** 与超时竞速（timer 服务：宿主 fiber 计时器，插件停止时自动清理）。collect 先完成 → false；超时 → true。 */

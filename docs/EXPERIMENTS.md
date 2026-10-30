@@ -233,8 +233,60 @@ latencyMs 是完整调用时长而非首包；且未核对实际路由。curl �
   **网关物理 TTFT ~2s 未解**；human fresh L1-live 59% 无退化
 - 缓存兜底不变：命中查询 0 延迟零降级（§8）
 
-### 9.3 悬而未决（交接见 `.handoff/` actions t000001，本地私有，未追踪）
+### 9.3 悬而未决（t000001 已于 §10 闭环；余下两项另见 §10.3）
 
 - 决策 A/B：接受网关 TTFT ~2s vs 0.1.7 加 `queryExpansion.provider` 走官方直连（107ms）；
   用户此前倾向不直连官方（「官方也可能思维链全开」）——已被本节 curl 实测排除，待用户拍板
 - p95 ≤2.0s 门禁口径修订（fresh vs 生产缓存口径）：连续 FAIL 均为网关环境变量，建议修订口径
+
+## 10. 扩展降级真因定位与修复（2026-10-30，t000001 闭环）
+
+### 10.1 真因（真机复现，`expansion.reason` 读出）
+
+§9 的归因链（reasoning 模型 thinking 预热）**只覆盖 reasoning 型模型**。生产默认路由早已
+换成**无 reasoning 能力**的模型，该侧的降级原因从未被定位——直到 0.1.10 补上
+`expansion.reason` 诊断后才读得出来。真机（宿主 dsh 0.2.0-rc.2 真实 pi-ai 服务，
+sensenova-6.8-flash-lite / agnes-3.0-flash，2026-10-30）复现：
+
+```
+expansion.reason = "stream-error: expansion stream error: provider \"sensenova\"
+  model \"sensenova-6.8-flash-lite\" does not support reasoning effort \"off\""
+```
+
+宿主 seam 对**模型不具备 reasoning 能力**时的判定（`dsh-llm` `resolveCallWithInfo`）：
+`info.reasoning === undefined` 且请求显式带 `reasoningEffort` ⇒ 抛
+`UNSUPPORTED_REASONING_EFFORT`。而 0.1.6 的修复把 `reasoningEffort: 'off'` **硬编码**进
+扩展请求 ⇒ 对这类模型 100% 降级、检索退化为纯词法。
+
+因果对照（同一真实路由，唯一变量是是否带 `reasoningEffort`）：
+
+| 模型 | 带 `off` | 不带 |
+|---|---|---|
+| sensenova-6.8-flash-lite（无 reasoning） | 拒（`UNSUPPORTED_REASONING_EFFORT`，0ms） | **OK** 2.6s / 4 variants |
+| agnes-3.0-flash（无 reasoning） | 拒（同上） | **OK** 7.5s / 4 variants |
+| 声明 `reasoningEfforts` 的模型 | **OK** 4.8s | OK 3.3s（走 `defaultEffort`，思维链开） |
+
+⇒ 两条结论：① 非 reasoning 模型必须**不带**该参数；② reasoning 模型**带** `off` 才是
+「关思维链」的正解（§9.2）。二者不可用同一个固定取值覆盖。
+
+### 10.2 修复（0.1.11）：先带、被拒则去参重试
+
+扩展请求仍先带 `reasoningEffort: 'off'`；宿主以 `UNSUPPORTED_REASONING_EFFORT` 拒绝时，
+判定该模型无 reasoning 能力，**去掉该参数重试一次**。该拒绝发生在宿主**本地校验**——
+不发 provider 请求、零成本、零额外配额（实测拒绝耗时 0ms）。未被拒的模型本就支持
+reasoning，保留 `off` 各自走对分支。
+
+**顺序不可反**：宿主对支持 reasoning 的模型在未指定 `reasoningEffort` 时按
+`defaultEffort` 处理而**不报错**（上表第三行）⇒ 若先不带，被拒分支永不触发，
+reasoning 模型将永久丢掉「关思维链」的收益（§9.2 的 11.3s 慢路径重现）。
+
+修复后真机复验（sensenova-6.8-flash-lite 真实调用）：
+`expansion.source = "live"`、`degraded = false`、`variantsCount = 4`（修复前恒为
+`degraded: "lexical"` / `source: null`）。
+
+### 10.3 仍未决（与 §9.3 不同的两项，t000002–t000006）
+
+- 延迟门禁（p95 ≤ 2.0s）与 variance 门禁须在**修复后的真实扩展**下复跑——本节修复
+  把「100% 降级」变回「真实调用」，此前基于降级态测得的延迟数字全部作废
+- L2 enrichment / 查询截断 / human 集校准仍按 §8/§8.3 细则待办
+

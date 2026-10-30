@@ -19,6 +19,8 @@ interface BootOptions {
   llmVariants?: string[]
   llmTimeoutMs?: number
   llmFail?: boolean
+  /** 模拟「模型不支持 reasoning effort」：带该参数的调用被宿主拒绝（UNSUPPORTED_REASONING_EFFORT）。 */
+  llmRejectsReasoningEffort?: boolean
   corpusPath?: string
   dbPath?: string
   queryExpansion?: Record<string, unknown>
@@ -41,6 +43,20 @@ async function boot(opts: BootOptions = {}) {
       llmCalls.push({ provider: options?.provider, model: options?.model, reasoningEffort: options?.reasoningEffort })
       return {
         async *[Symbol.asyncIterator]() {
+          if (opts.llmRejectsReasoningEffort === true && options?.reasoningEffort !== undefined) {
+            // 宿主 seam 行为：无 reasoning 能力的模型带 reasoningEffort → 硬拒
+            yield {
+              type: 'finish',
+              reason: {
+                kind: 'error',
+                failure: {
+                  message: `provider "mock-provider" model "mock-model" does not support reasoning effort "${String(options.reasoningEffort)}"`,
+                  code: 'UNSUPPORTED_REASONING_EFFORT',
+                },
+              },
+            }
+            return
+          }
           if (opts.llmFail === true) {
             yield { type: 'finish', reason: { kind: 'error', failure: { message: 'mock fail' } } }
             return
@@ -333,6 +349,43 @@ describe('L1 扩展专用路由（0.1.6：关思维链 + 显式模型）', () =>
     // model 未 pin → 仍跟随会话默认模型
     expect(app.llmCalls[0].model).toBe('mock-model')
     expect(app.llmCalls[0].reasoningEffort).toBe('off')
+  })
+})
+
+describe('L1 扩展能力自适应（0.1.11：模型无 reasoning 能力时重试）', () => {
+  it('宿主拒 reasoningEffort（模型无 reasoning 能力）→ 去掉该参数重试即通，不降级', async () => {
+    app = await boot({ agent, llmRejectsReasoningEffort: true })
+    await app.service._seedWrite({ content: '自适应测试 记忆条目', dedupeKey: 'adapt-1' },
+      { workspaceId: '/ws/one', ownerId: 'sess-1', authorTier: 'explicit' })
+    const s = await app.service.search('自适应测试怎么搜', {})
+    expect(s.degraded).toBe(null)
+    expect(s.expansion?.degraded).toBe(false)
+    expect(s.expansion?.source).toBe('live')
+    expect(s.expansion?.variantsCount).toBe(2)
+    // 首次带 off 被拒 → 第二次不带该参数
+    expect(app.llmCalls.length).toBe(2)
+    expect(app.llmCalls[0].reasoningEffort).toBe('off')
+    expect(app.llmCalls[1].reasoningEffort).toBeUndefined()
+  })
+
+  it('宿主接受 reasoningEffort（模型支持 reasoning）→ 单次调用即通，不重试', async () => {
+    app = await boot({ agent })
+    await app.service._seedWrite({ content: '自适应测试 记忆条目二', dedupeKey: 'adapt-2' },
+      { workspaceId: '/ws/one', ownerId: 'sess-1', authorTier: 'explicit' })
+    const s = await app.service.search('自适应测试怎么搜', {})
+    expect(s.degraded).toBe(null)
+    expect(s.expansion?.source).toBe('live')
+    expect(app.llmCalls.length).toBe(1)
+    expect(app.llmCalls[0].reasoningEffort).toBe('off')
+  })
+
+  it('非 reasoning-effort 类错误不触发重试（只调一次仍降级）', async () => {
+    app = await boot({ agent, llmFail: true })
+    await app.service._seedWrite({ content: '自适应测试 记忆条目三', dedupeKey: 'adapt-3' },
+      { workspaceId: '/ws/one', ownerId: 'sess-1', authorTier: 'explicit' })
+    const s = await app.service.search('自适应测试怎么搜', {})
+    expect(s.degraded).toBe('lexical')
+    expect(app.llmCalls.length).toBe(1)
   })
 })
 

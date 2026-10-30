@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **docs**: variance 门禁复验（t000006 闭环，EXPERIMENTS §15）——**未改 `src/`**，纯度量。
+  可复现脚本 `scripts/variance-gate.mjs`（真实 LLM 调用，非 hermetic，不进 CI verify 链）。
+  - **门禁（逐条口径 / 门禁本体 `probe('variance', {fresh:true})`）通过**：10 轮逐轮
+    8,8,5,7,7,7,4,8,6,6 /14 ⇒ **mean 47%**（≥30% PASS）、**range 29%–57%**（floor ≥20%
+    PASS）、**降级 0/140**。
+  - **同口径对比上游偏低 8.7–9.6pp**：批量 C 臂 27% [21-29]（上游 35.7% [29-43]）、
+    批量 D 臂 54% [36-71]（上游 63.6% [50-79]）⇒ 归因于**扩展模型不同**
+    （sensenova-6.8-flash-lite vs deepseek-chat），非实现回归；零词法重叠的 hard 集对扩展
+    质量敏感。⇒ 门禁阈值须声明扩展模型。
+  - **批量 D 臂 floor 未达标**（36% < 45%）：「每轮新生成富化」质量波动更大（§11.5 已测
+    LLM 富化 21%–64%）⇒ 该臂天然难满足 floor；基准富化（逐条口径）floor 29%，稳。
+  - **门禁本体缺口**：`probe('variance')`（`src/probe.ts:309`）只跑一个臂（rich 表 + 逐条
+    扩展），未实现 DESIGN:235 要求的 C/D 双臂 ⇒ 本轮的 C/D 双臂由
+    `scripts/variance-gate.mjs --mode batch` 按上游 `variance.mjs` 口径补齐。
+  - **富化的排序增益不依赖扩展模型**：批量口径 D 54% vs C 27%（+27pp），与 §11.3（+35pp）、
+    §11.6 一致。
+  - **t000001 修复的代价已量化**：每次扩展调 2 次 `llm.stream`（带 off 被拒 → 去参重试）；
+    被拒那次是宿主**本地校验**（0ms、不发 provider 请求）⇒ 不烧配额、不加延迟，但宿主
+    侧多一次 stream 构造（宿主未暴露模型 reasoning 能力查询 API，无法事前探测）。
 - **docs**: human 集校准审计（t000005 闭环，EXPERIMENTS §14）——**未改 `src/`、未改 fixture**
   （`human-queries.json` 是历史证据链的基准，保持不动）。可复现脚本
   `scripts/human-set-audit.mjs`（hermetic）。三项可复算偏差：

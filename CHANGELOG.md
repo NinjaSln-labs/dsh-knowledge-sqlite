@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+- **feat**: 查询截断启用批（t000025 闭环，EXPERIMENTS §16）——**改了 `src/`**。
+  关闭 DESIGN:135 规定的生产 `maxQueryTrigrams` 默认 24（此前实现默认 0=不限）。
+  - **D1：`dfOf` 的 O(N) 全表扫描 → `fts5vocab` 词表查询**。先前记录「node:sqlite
+    未启用 vocab、t_vocab 表不存在」**已过时**：Node v24.18.0 实测 `fts5vocab` 可用，
+    词表随 FTS 写入自动更新。采用 instance 模式（term→doc），522 条语料每查询
+    **7.085ms → 0.362ms（≈20x）**，且开销不再随规模线性放大。
+  - **D2：df 跨 workspace 稀释 idf → 限定调用方可见文档**（词表 JOIN `items`，
+    套用与检索 SQL 相同的可见性条件）。
+  - **D3：snippet/provenance 用未截断 gram → 用实际 MATCH 的 gram 集**
+    （`store.search` 回传 `qgrams`）。
+  - **D4：零测试覆盖 → 新增 6 个用例**（idf 优先 vs 顺序截断对照、cap 截断无损、
+    跨 workspace df 隔离、matchOf 转义、截断边界）。
+  - **顺带修掉真实缺陷**：`matchOf` 未转义 gram 内的 `"` ⇒ FTS5 MATCH 语法错误 ⇒
+    `store.search` 的 catch 分支**静默返回空数组**（检索失效无报错）。修法：按 FTS5
+    字面量规则转义为 `""`，已加单测。
+  - **召回无损**：cap24 逐条 rank 与「不限」完全一致（hard 50%、human 59%）；
+    顺序截断仍丢判别词（human 41%，反例对照）。
+  - **延迟代价**：cap24 相对 cap0 的 p95 差值 522 条语料 **+10.22ms → +0.52ms**
+    （72 条 +0.14ms、222 条 +0.85ms）⇒ 达成「p95 回到 cap=0 量级」判据。
+  - **配置默认值变更**：`retrieval.maxQueryTrigrams` 默认 0 → 24。显式配 0 的部署不受影响。
+- **feat**: 延迟门禁口径修订（t000026 闭环，EXPERIMENTS §17）——**改了 `src/`**。
+  - 新增 `classifyDegrade(reason)`：降级按原因分类——`provider`（stream-error 限流/
+    连接错误、no-route、no-llm-service 等环境变量）/ `implementation`（timeout 真慢、
+    empty-variants 真坏）/ `other`。provider 类**不计入 p95**并单列 id。
+  - 门禁改**三态**：`gateState: pass | fail | indeterminate`，`gate` 布尔仅在 pass 时为 true；
+    新增 `gateReason` 人类可读判据。⇒ provider 限流时为 **indeterminate（不可判定）**，
+    既不误判为通过也不误判为不通过。
+- **feat**: variance 门禁补 C/D 双臂 + 阈值声明扩展模型（t000030 闭环，EXPERIMENTS §18）
+  ——**改了 `src/`**。关闭 DESIGN:235「both the C arm and the D arm」的缺口。
+  - 每轮同时跑 C 臂（base 表 + 逐条真实扩展）与 D 臂（rich 表 + 逐条真实扩展），
+    **共用同一批扩展变体** ⇒ 臂间差只来自「有无富化」。
+  - 两臂分别给 mean/range/floor 判据：C mean≥30% floor≥20%；D mean≥60% floor≥45%。
+  - 新增 `expansionModel: { provider, model, note }` 声明扩展路由——阈值是在
+    `deepseek-chat` 上标定的，换扩展模型即换尺（§15.3 实测低 8.7–9.6pp）⇒ 读数与
+    门槛的前提条件同现。
+- **feat**: reasoning 模型扩展输出截断修复（t000027 闭环，EXPERIMENTS §13.4）——**改了 `src/`**。
+  - 根因：`maxOutputTokens` 默认 300 是**总输出预算**，reasoning 模型思维链
+    （实测 46–67 个 reasoning-delta chunk）吃光预算 ⇒ 正式输出被 JSON 截断 ⇒
+    `empty-variants` 降级。非 reasoning 模型在同预算下正常 ⇒ reasoning 专属问题。
+  - 修法：**只在空变体这条失败路径上**用 2 倍预算重试一次（600）。正常路径行为不变
+    （非 reasoning 模型不触发第二次调用）；重试仍失败则照常降级为 `empty-variants`。
+  - 新增诊断计数 `stats.retryRecovered`。
+- **feat**: 知识条目侧查询集（t000028 闭环，EXPERIMENTS §19）——**改了 `src/`**（新增 probe
+  套件）+ 新增 fixture。关闭 §14 审计出的「human 集的对偶缺口」。
+  - 新增 `tests/fixtures/corpus/knowledge-queries.json`：**27 条**（24 有目标 + 3 none），
+    目标覆盖已富化知识条目 m1–m12 各 2 条，写法对齐 human 集（真实口吻、少量 none、
+    目标唯一），且**不复用 `enriched.json` 的问法**（避免富化臂平凡命中）。
+  - 三项判据全部 PASS：L0 纯词法 recall@1 **非平凡下界**（22 条语料 42%、522 条语料
+    29%——既不恒为 0 也不被平凡命中）、富化增益可测（**+12pp / +21pp**，与 §11.3 +35pp
+    同向）、3 条 none 不误报。
+  - 新增 `probe('knowledge')` 套件（A/D 双臂读数 + 三项 `gates` 布尔），
+    `probe('all')` 与 `knowledge_probe` 工具的 `suite` 枚举均已含 `knowledge`。
+  - 新增可复现脚本 `scripts/knowledge-set-audit.mjs`（hermetic）。
 - **docs**: variance 门禁复验（t000006 闭环，EXPERIMENTS §15）——**未改 `src/`**，纯度量。
   可复现脚本 `scripts/variance-gate.mjs`（真实 LLM 调用，非 hermetic，不进 CI verify 链）。
   - **门禁（逐条口径 / 门禁本体 `probe('variance', {fresh:true})`）通过**：10 轮逐轮

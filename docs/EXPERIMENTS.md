@@ -767,3 +767,164 @@ on the human set (measured 82% / 88%, 522-item corpus)」建立在一个**从未
    校验拒绝 → 去参重试）。被拒那次**不发 provider 请求**（0ms 本地校验）⇒ 不烧配额、
    不加延迟，但宿主侧多一次 stream 构造。宿主未暴露模型 reasoning 能力查询 API（§12.5 D2
    同源），故无法事前探测、只能事后重试。
+
+## 16. 查询截断启用批：df 走词表 + 默认 cap 24（2026-10-31，t000025 闭环）
+
+> 可复现脚本：`node scripts/cap-measure.mjs`（hermetic，只用仓内 fixture）
+> **本节改了 `src/`**（store 检索路径 + search.matchOf + 默认配置）
+
+### 16.1 修法：fts5vocab 词表替代 O(N) 全表扫描
+
+§12.5 记的 D1 是「`dfOf` O(N) 全表扫描且每次查询都做」⇒ **默认 cap 改 24 不能单独做**。
+本轮先前的记录写「实测 node:sqlite 未启用 vocab，t_vocab 表不存在」——**该记录已过时**：
+本轮在 Node v24.18.0 上实测 `fts5vocab` **可用**（`CREATE VIRTUAL TABLE … USING fts5vocab(t,'row'|'instance')`
+均成功），词表随 FTS 写入自动更新、删除后同步清理。
+
+采用 **instance 模式**（term→doc 行）而非 row 模式：instance 可 JOIN `items` 表，
+从而把 df 限定在**调用方可见文档**内（顺带修掉 D2「dfOf 扫全表跨 workspace」）。
+
+| 方案 | 522 条语料每查询耗时 | 可见性口径 |
+|---|---|---|
+| 旧：全表扫描 `SELECT content FROM fts` + JS 切词统计 | **7.085ms** | 全库（含其他 workspace） |
+| 新：`fts5vocab(instance)` JOIN items + GROUP BY | **0.362ms** | 调用方可见文档（与检索 SQL 同口径） |
+
+⇒ **≈20x 加速**，且开销不再随语料规模线性放大。
+
+### 16.2 D1–D4 逐项闭环
+
+| # | 缺陷 | 修法 | 状态 |
+|---|---|---|---|
+| D1 | `dfOf` O(N) 全表扫描，每次查询都做 | 改 `fts5vocab(instance)` 词表查询（见 §16.1） | 已修 |
+| D2 | `dfOf` 扫全表跨 workspace | df 查询 JOIN `items` 并套用与检索 SQL 相同的可见性条件 | 已修 |
+| D3 | snippet/provenance 用未截断的全量 gram | `store.search` 回传实际用于 MATCH 的 `qgrams`，展示层改用该集合 | 已修 |
+| D4 | `truncateGrams` / df 零测试覆盖 | 新增 6 个用例（idf 优先对照、cap 无损、跨 workspace 隔离、转义） | 已修 |
+
+### 16.3 顺带修掉一个真实缺陷：`matchOf` 未转义引号
+
+实测发现：FTS5 词表含 `"` 字符（如 `"<`），`matchOf` 用 `"${g}"` 包裹 gram 时，
+**FTS5 字符串字面量内的 `"` 必须转义为 `""`**，否则整条 MATCH 查询语法错误
+⇒ `store.search` 的 catch 分支静默返回空数组（检索静默失效，无任何报错）。
+
+修法：`matchOf` 对内嵌双引号做 `""` 转义（FTS5 标准字面量转义）。已加单测护栏。
+
+### 16.4 启用 cap 24 后的召回与延迟
+
+**召回无损**（逐条 rank 与「不限」完全一致）：
+
+| 策略 | hard recall@1 | human recall@1 |
+|---|---|---|
+| 不限 | 7/14 (50%) | 10/17 (59%) |
+| **idf 优先 cap24（默认）** | **7/14 (50%)** | **10/17 (59%)** |
+| 顺序截断 cap24（反例对照） | 7/14 (50%) | 7/17 (41%) |
+
+**延迟代价**（§12.5 的 D1 代价现已消除）：
+
+| 语料规模 | cap=0 p95 | cap=24 p95 | 差值 | §12.5 旧读数（旧实现） |
+|---|---|---|---|---|
+| 72 条 | 0.89ms | 1.03ms | **+0.14ms** | +1.35ms |
+| 222 条 | 1.36ms | 2.21ms | **+0.85ms** | +3.00ms |
+| 522 条 | 1.42ms | 1.94ms | **+0.52ms** | **+10.22ms** |
+
+⇒ t000025 判据「p95 回到 cap=0 量级（<2ms@522 条）」达成（+0.52ms）。
+
+### 16.5 配置默认值变更
+
+`retrieval.maxQueryTrigrams` 默认 **0 → 24**（对齐 DESIGN:135）。生产环境若曾显式配 0
+（不限）则不受影响；未配置过的部署将从「不限」切到「idf 优先 cap 24」——召回无损（§16.4）、
+延迟更稳（gram 数封顶 ⇒ MATCH 表达式更短）。
+
+## 17. 延迟门禁口径修订：区分「不可判定」与「不通过」（2026-10-31，t000026 闭环）
+
+> **本节改了 `src/`**（`src/probe.ts` 的 `latency()`）
+
+### 17.1 问题
+
+§13 确认：当前口径把两类降级混在一起——① **provider 错误类**（限流 429 / 连接错误，
+40–120ms 内返回，环境变量）② **实现属性类**（timeout 真慢、empty-variants 真坏）。
+限流类被排除后 p95=null ⇒ 门禁**不可判定**，但 `gate` 字段此前与「通过」共用布尔语义，
+无法区分「不可判定」与「不通过」。
+
+### 17.2 修法
+
+`probe.ts` 新增 `classifyDegrade(reason)`：按降级 reason 的前缀分类——
+
+| 类别 | reason 前缀 | 语义 | 是否计入 p95 |
+|---|---|---|---|
+| `provider` | `stream-error` / `no-route` / `no-llm-service` / `no-agentDefaultModel-service` / `selection-threw` | 环境变量不可用 | **否**（单列） |
+| `implementation` | `timeout` / `empty-variants` | 真慢 / 真坏 | **是** |
+| `other` | 其余 | 未分类 | 否（单列） |
+
+门禁输出改为**三态**：
+
+- `gateState: 'pass' | 'fail' | 'indeterminate'`（`gate` 布尔仅在 pass 时为 true）
+- `degradeClasses.provider` / `.implementation` / `.other` 分别列出降级查询 id
+- `gateReason` 给出人类可读判据
+
+⇒ 「provider 限流时不会误判为通过或不通过」：限流 ⇒ indeterminate；真实超时 ⇒ fail。
+
+## 18. variance 门禁补 C/D 双臂 + 阈值声明扩展模型（2026-10-31，t000030 闭环）
+
+> **本节改了 `src/`**（`src/probe.ts` 的 `variance()`）
+
+### 18.1 缺口
+
+§15.5 记的实现缺口：`probe('variance')` 只跑一个臂（rich 表 + 逐条扩展），
+而 DESIGN:235 要求「both the C arm and the D arm」进 10-run variance 条款。
+
+### 18.2 修法
+
+`variance()` 现在每轮同时跑两个臂，**共用同一批扩展变体**（臂间差只来自「有无富化」）：
+
+- **C 臂**：base 表（仅原文）+ 逐条真实扩展 —— 对应 DESIGN 的默认配置门禁
+- **D 臂**：rich 表（原文 + 富化）+ 逐条真实扩展 —— 对应 L1+L2
+
+两臂分别给 mean / range / floor 判据：C mean≥30% floor≥20%；D mean≥60% floor≥45%。
+
+### 18.3 阈值随扩展模型标定 ⇒ 输出必须声明模型
+
+DESIGN:232 的 30%/60% 是在 `deepseek-chat` 上标定的（上游 C 35.7% [29-43]、D 63.6% [50-79]）；
+§15.3 实测 `sensenova-6.8-flash-lite` 同口径低 8.7–9.6pp ⇒ **换扩展模型即换一把尺**。
+
+`variance()` 输出新增 `expansionModel: { provider, model, note }`，声明本次读数的扩展路由
+（取自宿主的 `agentDefaultModel.currentSelection()`）。⇒ 读数与门槛的前提条件同现。
+
+## 19. 知识条目侧查询集（2026-10-31，t000028 闭环）
+
+> 可复现脚本：`node scripts/knowledge-set-audit.mjs`（hermetic，只用仓内 fixture）
+> 新增 fixture：`tests/fixtures/corpus/knowledge-queries.json`
+> **本节改了 `src/`**（`src/probe.ts` 新增 `knowledge` 套件）
+
+### 19.1 缺口
+
+§14 审计结论：human 集 17 条有目标查询 **0/17** 落在已富化知识条目 m1–m12（全部指向未富化的
+n1–n10）；m1–m12 是 harness 运维事实、human 集问记忆插件设计讨论 ⇒ **主题不相交**，
+relabel 后 recall@1 三路径全 0/17 ⇒ 语料缺「知识条目侧」查询集。
+
+### 19.2 新查询集
+
+`knowledge-queries.json`：**27 条**（24 有目标 + 3 none），目标覆盖 m1–m12 各 2 条，
+写法对齐 human 集（真实口吻改写、含少量 none、目标唯一）。
+
+设计约束：**不复制 `enriched.json` 的问法**（那是富化字段本身，会让富化臂平凡命中），
+改用口语化改写并保留检索线索 ⇒ L0 纯词法既不恒为 0、也不被平凡命中。
+
+### 19.3 三项判据（全部 PASS）
+
+| 语料规模 | A 臂（L0 纯词法，base 表） | D 臂（原文+富化，rich 表） | 富化增益 | none 误报 |
+|---|---|---|---|---|
+| 22 条（无干扰项） | 10/24 (**42%**) | 13/24 (**54%**) | **+12pp** | 无 |
+| 522 条（含干扰项） | 7/24 (**29%**) | 12/24 (**50%**) | **+21pp** | 无 |
+
+1. **L0 有非平凡下界**（判据 1）：29%（含干扰项）/ 42%（无干扰项）——不恒为 0（≠human 集
+   relabel 后的 0/17），也不被词法平凡命中（≠100%）。
+2. **富化前/后差异可测**（判据 2）：+21pp（含干扰项）——与 §11.3（+35pp）、§15.6（+27pp）
+   同向，说明「知识条目侧的富化增益」与「过程记录侧」一致。
+3. **none 不误报**（判据 3）：3 条 none 查询 top1 均非知识条目。
+
+⇒ 与 §14 互补：human 集测「过程记录侧」（n*），本集测「知识条目侧」（m*）。
+两集合并 ⇒ 检索质量的两个面都有查询集，不再是单边证据。
+
+### 19.4 接入门禁
+
+`probe('knowledge')` 新套件：输出 A/D 双臂读数、三项判据的 `gates` 布尔。
+`probe('all')` 与 `knowledge_probe` 工具的 `suite` 枚举均已含 `knowledge`。

@@ -21,6 +21,8 @@ interface BootOptions {
   llmFail?: boolean
   /** 模拟「模型不支持 reasoning effort」：带该参数的调用被宿主拒绝（UNSUPPORTED_REASONING_EFFORT）。 */
   llmRejectsReasoningEffort?: boolean
+  /** 模拟 reasoning 模型思维链吃满输出预算：maxTokens 小于该值时输出被截断（JSON 不完整）。 */
+  llmTruncatedBelowMaxTokens?: number
   corpusPath?: string
   dbPath?: string
   queryExpansion?: Record<string, unknown>
@@ -30,7 +32,7 @@ async function boot(opts: BootOptions = {}) {
   const ctx = new Context()
   const registered: Array<{ name: string }> = []
   const emitted: Array<{ event: string; payload: unknown }> = []
-  const llmCalls: Array<{ provider?: unknown; model?: unknown; reasoningEffort?: unknown }> = []
+  const llmCalls: Array<{ provider?: unknown; model?: unknown; reasoningEffort?: unknown; maxTokens?: unknown }> = []
 
   ctx.provide('agents', {
     currentInitiator: () => opts.agent ?? undefined,
@@ -39,8 +41,8 @@ async function boot(opts: BootOptions = {}) {
     currentSelection: () => ({ provider: 'mock-provider', model: 'mock-model' }),
   })
   ctx.provide('llm', {
-    stream: (options: { provider?: unknown; model?: unknown; reasoningEffort?: unknown }) => {
-      llmCalls.push({ provider: options?.provider, model: options?.model, reasoningEffort: options?.reasoningEffort })
+    stream: (options: { provider?: unknown; model?: unknown; reasoningEffort?: unknown; maxTokens?: unknown }) => {
+      llmCalls.push({ provider: options?.provider, model: options?.model, reasoningEffort: options?.reasoningEffort, maxTokens: options?.maxTokens })
       return {
         async *[Symbol.asyncIterator]() {
           if (opts.llmRejectsReasoningEffort === true && options?.reasoningEffort !== undefined) {
@@ -66,7 +68,13 @@ async function boot(opts: BootOptions = {}) {
             return
           }
           const variants = opts.llmVariants ?? ['变体一', '变体二']
-          yield { type: 'text-delta', text: JSON.stringify({ variants }) }
+          const full = JSON.stringify({ variants })
+          // 预算不足 ⇒ 输出被截断（JSON 不完整，解析失败 ⇒ empty-variants）
+          const budget = typeof options?.maxTokens === 'number' ? options.maxTokens : Infinity
+          const text = opts.llmTruncatedBelowMaxTokens !== undefined && budget < opts.llmTruncatedBelowMaxTokens
+            ? full.slice(0, Math.max(1, Math.floor(full.length / 2)))
+            : full
+          yield { type: 'text-delta', text }
           yield { type: 'finish', reason: { kind: 'stop' } }
         },
       }
@@ -236,6 +244,45 @@ describe('V1.11 契约（服务方法）', () => {
     const r = await app.service.search('失败降级测试', {})
     expect(r.degraded).toBe('lexical')
     expect(r.expansion?.reason).toMatch(/^stream-error: /)
+  })
+
+  it('空变体（输出截断）用更大预算重试一次并恢复——reasoning 模型思维链吃预算（t000027）', async () => {
+    // mock：maxTokens < 400 时输出被截断（JSON 不完整）
+    app = await boot({
+      agent,
+      llmVariants: ['重试后变体一', '重试后变体二'],
+      llmTruncatedBelowMaxTokens: 400,
+      queryExpansion: { maxOutputTokens: 300 },
+    })
+    const r = await app.service.search('截断重试测试', {})
+    expect(r.degraded).toBe(null)
+    expect(r.expansion?.degraded).toBe(false)
+    expect(r.expansion?.source).toBe('live')
+    expect(r.expansion?.variantsCount).toBe(2)
+    // 两次调用：首次 300（截断），重试 600（成功）
+    const budgets = app.llmCalls.map((c) => c.maxTokens)
+    expect(budgets).toEqual([300, 600])
+  })
+
+  it('非截断路径不触发重试（正常调用只发一次）', async () => {
+    app = await boot({ agent, llmVariants: ['变体一'], queryExpansion: { maxOutputTokens: 300 } })
+    const r = await app.service.search('无需重试测试', {})
+    expect(r.degraded).toBe(null)
+    expect(app.llmCalls.length).toBe(1)
+  })
+
+  it('重试仍失败 → 照常降级为 empty-variants', async () => {
+    // mock：任何预算下都截断（阈值取极大值）
+    app = await boot({
+      agent,
+      llmVariants: ['x'],
+      llmTruncatedBelowMaxTokens: Number.MAX_SAFE_INTEGER,
+      queryExpansion: { maxOutputTokens: 300 },
+    })
+    const r = await app.service.search('重试也失败', {})
+    expect(r.degraded).toBe('lexical')
+    expect(r.expansion?.reason).toMatch(/^empty-variants: /)
+    expect(app.llmCalls.length).toBe(2)
   })
 
   it('budget 截断：maxItems / maxTokens', async () => {
@@ -446,5 +493,83 @@ describe('probe（实验套件）', () => {
     expect(part.noneQueries.count).toBe(3)
     expect(part.noneQueries.falsePositives).toBe(null)
     expect(part.noneQueries.pass).toBe(true)
+  })
+
+  it('eval-knowledge 知识条目侧查询集：L0 非平凡下界 + 富化增益可测 + none 不误报（t000028）', { timeout: 60000 }, async () => {
+    app = await boot({ agent, corpusPath: CORPUS })
+    expect((await app.service.probe('seed')).ok).toBe(true)
+    const report = await app.service.probe('knowledge')
+    expect(report.ok).toBe(true)
+    const part = report.parts[0] as {
+      queries: number
+      targets: number
+      arms: Record<string, { recall1: string }>
+      recall1Pct: { A: number; D: number; enrichmentGainPp: number }
+      noneQueries: { count: number; falsePositives: string | null }
+      gates: { l0NonTrivial: boolean; enrichmentVisible: boolean; noneNoFalsePositives: boolean }
+    }
+    expect(part.queries).toBe(27)
+    expect(part.targets).toBe(24)
+    // 判据 1：L0 纯词法有非平凡下界（不恒 0，也不平凡 100%）
+    expect(part.recall1Pct.A).toBeGreaterThan(0)
+    expect(part.recall1Pct.A).toBeLessThan(100)
+    expect(part.gates.l0NonTrivial).toBe(true)
+    // 判据 2：富化前/后差异可测
+    expect(part.recall1Pct.D).toBeGreaterThan(part.recall1Pct.A)
+    expect(part.gates.enrichmentVisible).toBe(true)
+    // 判据 3：none 不误报
+    expect(part.noneQueries.count).toBe(3)
+    expect(part.noneQueries.falsePositives).toBe(null)
+    expect(part.gates.noneNoFalsePositives).toBe(true)
+  })
+
+  it('latency 门禁三态：provider 错误类单列，p95 无样本时为不可判定而非通过（t000026）', { timeout: 60000 }, async () => {
+    // mock：全部请求因 provider 限流失败（stream-error）⇒ 无有效样本 ⇒ indeterminate
+    app = await boot({ agent, corpusPath: CORPUS, llmFail: true })
+    expect((await app.service.probe('seed')).ok).toBe(true)
+    const report = await app.service.probe('latency')
+    const part = report.parts[0] as {
+      p95LatencyMs: number | null
+      samples: number
+      gate: boolean
+      gateState: string
+      gateReason: string
+      degradeClasses: { provider: string | null; implementation: string | null }
+    }
+    expect(part.p95LatencyMs).toBe(null)
+    expect(part.samples).toBe(0)
+    // 不可判定 ≠ 通过
+    expect(part.gateState).toBe('indeterminate')
+    expect(part.gate).toBe(false)
+    expect(part.gateReason).toContain('indeterminate')
+    // provider 错误类被单列，不混入 implementation
+    expect(part.degradeClasses.provider).not.toBe(null)
+    expect(part.degradeClasses.implementation).toBe(null)
+  })
+
+  it('variance 门禁输出 C/D 双臂 + 扩展模型声明（t000030）', { timeout: 120000 }, async () => {
+    app = await boot({ agent, corpusPath: CORPUS })
+    expect((await app.service.probe('seed')).ok).toBe(true)
+    const report = await app.service.probe('variance', { fresh: true, runs: 1 })
+    const part = report.parts[0] as {
+      runs: number
+      expansionModel: { provider: string | null; model: string | null }
+      armC: { meanRecall1Pct: number; range: string; gateMean: boolean; gateFloor: boolean; thresholds: { mean: string; floor: string } }
+      armD: { meanRecall1Pct: number; range: string; gateMean: boolean; gateFloor: boolean; thresholds: { mean: string; floor: string } }
+    }
+    expect(part.runs).toBe(1)
+    // 双臂齐备（DESIGN:235 要求 C 与 D 都进 variance 条款）
+    expect(part.armC).toBeDefined()
+    expect(part.armD).toBeDefined()
+    // 阈值声明：C mean≥30%/floor≥20%；D mean≥60%/floor≥45%
+    expect(part.armC.thresholds.mean).toBe('30%')
+    expect(part.armC.thresholds.floor).toBe('20%')
+    expect(part.armD.thresholds.mean).toBe('60%')
+    expect(part.armD.thresholds.floor).toBe('45%')
+    expect(typeof part.armC.meanRecall1Pct).toBe('number')
+    expect(typeof part.armD.meanRecall1Pct).toBe('number')
+    // 扩展模型声明（阈值是「在扩展模型 X 下」标定的）
+    expect(part.expansionModel.provider).toBe('mock-provider')
+    expect(part.expansionModel.model).toBe('mock-model')
   })
 })

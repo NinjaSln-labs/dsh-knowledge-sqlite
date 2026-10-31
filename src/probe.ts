@@ -53,7 +53,7 @@ export async function runProbe(
     service: KnowledgeService
     corpusPath: string
   },
-  suite: 'seed' | 'hard' | 'human' | 'contract' | 'latency' | 'variance' | 'all',
+  suite: 'seed' | 'hard' | 'human' | 'knowledge' | 'contract' | 'latency' | 'variance' | 'all',
   caller: { stamps: KnowledgeStamps; sessionId: string } | null,
   runs = 10,
 ): Promise<ProbeReport> {
@@ -64,6 +64,7 @@ export async function runProbe(
     if (suite === 'seed' || suite === 'all') report.parts.push(await seed(deps, caller, base))
     if (suite === 'hard' || suite === 'all') report.parts.push(await evalHard(deps, caller, base))
     if (suite === 'human' || suite === 'all') report.parts.push(await evalHuman(deps, caller, base))
+    if (suite === 'knowledge' || suite === 'all') report.parts.push(await evalKnowledge(deps, caller, base))
     if (suite === 'contract' || suite === 'all') report.parts.push(await contract(deps, caller))
     if (suite === 'latency' || suite === 'all') report.parts.push(await latency(deps, caller, base))
     if (suite === 'variance') report.parts.push(await variance(deps, runs))
@@ -78,8 +79,111 @@ export async function runProbe(
 }
 
 /**
+ * 知识条目侧查询集（t000028）：human 集的对偶缺口。
+ *
+ * human 集（EXPERIMENTS §14）的 17 条有目标查询全部指向未富化的 n1-n10，0/17 落在
+ * 已富化知识条目 m1-m12 ⇒ 该集测不到「知识条目」这一侧。本套件用
+ * knowledge-queries.json（27 条，24 有目标 + 3 none，目标全为 m1-m12）补上对偶面。
+ *
+ * 三项判据：
+ *   1. L0 纯词法（A 臂）recall@1 有非平凡下界——不恒 0，也不被词法平凡命中（≠100%）
+ *   2. 富化前/后差异可测（D 臂 > A 臂）
+ *   3. none 查询不误报命中知识条目
+ */
+async function evalKnowledge(
+  deps: { service: KnowledgeService },
+  caller: { stamps: KnowledgeStamps; sessionId: string },
+  base: string,
+): Promise<Record<string, unknown>> {
+  const queries = readJson(join(base, 'knowledge-queries.json')) as Array<{ id: string; text: string; target: string }>
+  const dedupeMap = await deps.service._dedupeIds()
+  const arms: Record<string, unknown> = {}
+  // A 臂：base 表 + 纯原文（L0 纯词法，无扩展无富化）
+  arms.A = await evalArm(deps, queries, 'base', false, null, dedupeMap)
+  // D 臂：rich 表 + 纯原文（原文 + 富化，隔离富化这一个变量）
+  arms.D = await evalArm(deps, queries, 'rich', false, null, dedupeMap)
+  const armA = arms.A as { recall1: string; targets: number; ranks: string }
+  const armD = arms.D as { recall1: string; ranks: string }
+  const r1Of = (s: string): number => Number(s.split('/')[0])
+  const targetN = Number(armA.targets)
+  const aPct = targetN > 0 ? Math.round((100 * r1Of(armA.recall1)) / targetN) : 0
+  const dPct = targetN > 0 ? Math.round((100 * r1Of(armD.recall1)) / targetN) : 0
+  // none 查询不误报：top1 必须是干扰项/噪声（不是知识条目 m1-m12）
+  const knowledgeIds = new Set(
+    [...dedupeMap].filter(([key]) => /^m\d+$/.test(key)).map(([, id]) => id),
+  )
+  const noneQueries = queries.filter((q) => q.target === 'none')
+  const noneFalsePositives: string[] = []
+  for (const q of noneQueries) {
+    const res = await deps.service._searchInternal(q.text, { table: TABLE_INTERNAL.base, expand: false })
+    const top = res.hits[0]
+    if (top !== undefined && knowledgeIds.has(top.id)) noneFalsePositives.push(q.id)
+  }
+  const gates = {
+    // 判据 1：L0 有非平凡下界（>0 且 <100%）
+    l0NonTrivial: aPct > 0 && aPct < 100,
+    // 判据 2：富化前/后差异可测
+    enrichmentVisible: r1Of(armD.recall1) > r1Of(armA.recall1),
+    // 判据 3：none 不误报
+    noneNoFalsePositives: noneFalsePositives.length === 0,
+  }
+  return {
+    name: 'eval-knowledge',
+    ok: gates.l0NonTrivial && gates.enrichmentVisible && gates.noneNoFalsePositives,
+    queries: queries.length,
+    targets: targetN,
+    arms,
+    recall1Pct: { A: aPct, D: dPct, enrichmentGainPp: dPct - aPct },
+    noneQueries: {
+      count: noneQueries.length,
+      falsePositives: noneFalsePositives.length > 0 ? noneFalsePositives.join(',') : null,
+    },
+    gates,
+    note: '知识条目侧查询集（t000028）：human 集的对偶面，目标全为已富化知识条目 m1-m12',
+  }
+}
+
+/**
+ * 降级原因分类（t000026：门禁口径修订）。
+ *
+ * 两类降级必须分开——混在一起会让「环境变量不可用」被误读成「实现慢」：
+ *  - **provider 错误类**（环境变量）：限流 429 / 连接错误 / 额度耗尽 / 路由缺失
+ *    ⇒ 40–120ms 内返回，**不是延迟问题**，应单列为「不可判定」
+ *  - **实现属性类**（真慢/真坏）：timeout（真慢）、empty-variants（真坏）
+ *    ⇒ 计入延迟分母，是门禁要约束的对象
+ */
+export type DegradeClass = 'provider' | 'implementation' | 'other'
+
+/** provider 错误类的 reason 前缀（宿主/上游环境问题，非实现延迟）。 */
+const PROVIDER_REASONS = [
+  'stream-error',      // provider 429/连接错误/流错误（含 rpm exhausted、rate limit）
+  'no-route',          // 路由缺失（provider/model 未配置）
+  'no-llm-service',    // 无 llm 服务
+  'no-agentDefaultModel-service',
+  'selection-threw',
+]
+
+/** 实现属性类的 reason 前缀（真慢或真坏）。 */
+const IMPLEMENTATION_REASONS = [
+  'timeout',           // 真慢：超过 timeoutMs
+  'empty-variants',    // 真坏：输出被截断 / 解析失败
+]
+
+export function classifyDegrade(reason: string | undefined): DegradeClass {
+  if (reason === undefined || reason === '') return 'other'
+  const key = reason.split(':', 1)[0]
+  if (IMPLEMENTATION_REASONS.includes(key)) return 'implementation'
+  if (PROVIDER_REASONS.includes(key)) return 'provider'
+  return 'other'
+}
+
+/**
  * 延迟门禁（V1.11：P95 L1 搜索延迟 ≤ 2.0s，人类查询集，4 路并发）。
  * 并发执行 human 查询集的 L1 搜索，收集非降级查询的 expansion.latencyMs。
+ *
+ * 口径修订（t000026）：降级按**原因分类**——provider 错误类（限流/连接错误）单列为
+ * 「环境变量不可用」，不参与 p95；实现属性类（timeout/empty-variants）计入。
+ * p95 无有效样本时门禁为**不可判定**（indeterminate），与「不通过」（fail）区分。
  */
 async function latency(
   deps: { service: KnowledgeService },
@@ -89,7 +193,7 @@ async function latency(
   const humanQueries = readJson(join(base, 'human-queries.json')) as Array<{ id: string; text: string; target: string }>
   const targeted = humanQueries.filter((q) => q.target && q.target !== 'none')
   const CONCURRENCY = 4
-  const results: Array<{ id: string; latencyMs: number | null; degraded: boolean }> = []
+  const results: Array<{ id: string; latencyMs: number | null; degraded: boolean; reason?: string }> = []
   const started = Date.now()
   let cursor = 0
   const workers = Array.from({ length: CONCURRENCY }, async () => {
@@ -101,19 +205,29 @@ async function latency(
           id: q.id,
           latencyMs: res.expansion?.latencyMs ?? null,
           degraded: res.degraded !== null,
+          ...(res.expansion?.reason === undefined ? {} : { reason: res.expansion.reason }),
         })
       } catch (error) {
-        results.push({ id: q.id, latencyMs: null, degraded: true })
+        results.push({ id: q.id, latencyMs: null, degraded: true, reason: `exception: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
   })
   await Promise.all(workers)
   const totalMs = Date.now() - started
-  const live = results.filter((r) => r.latencyMs !== null && !r.degraded).map((r) => r.latencyMs as number)
-  live.sort((a, b) => a - b)
+  // 非降级且 provider 未报错的样本才计入 p95（provider 错误类是环境变量，不是延迟）
+  const live = results
+    .filter((r) => r.latencyMs !== null && !r.degraded && classifyDegrade(r.reason) !== 'provider')
+    .map((r) => r.latencyMs as number)
+    .sort((a, b) => a - b)
   const p95 = live.length > 0 ? live[Math.min(live.length - 1, Math.floor(live.length * 0.95))] : null
   const mean = live.length > 0 ? Math.round(live.reduce((a, b) => a + b, 0) / live.length) : null
   const degradedIds = results.filter((r) => r.degraded).map((r) => r.id)
+  // 降级按类别分组：provider（环境变量）vs implementation（真慢/真坏）
+  const providerIds = results.filter((r) => r.degraded && classifyDegrade(r.reason) === 'provider').map((r) => r.id)
+  const implIds = results.filter((r) => r.degraded && classifyDegrade(r.reason) === 'implementation').map((r) => r.id)
+  const otherIds = results.filter((r) => r.degraded && classifyDegrade(r.reason) === 'other').map((r) => r.id)
+  // 三态门禁：pass / fail / indeterminate（无有效样本 = 不可判定，不是通过）
+  const gateState = p95 === null ? 'indeterminate' : (p95 <= 2000 ? 'pass' : 'fail')
   return {
     name: 'latency',
     ok: true,
@@ -123,9 +237,21 @@ async function latency(
     meanLatencyMs: mean,
     p95LatencyMs: p95,
     maxLatencyMs: live.length > 0 ? live[live.length - 1] : null,
+    samples: live.length,
     degraded: degradedIds.length > 0 ? degradedIds.join(',') : null,
+    // 降级分类（t000026）：provider 错误类单列，不混入 p95
+    degradeClasses: {
+      provider: providerIds.length > 0 ? providerIds.join(',') : null,
+      implementation: implIds.length > 0 ? implIds.join(',') : null,
+      other: otherIds.length > 0 ? otherIds.join(',') : null,
+    },
     perQuery: results.map((r) => `${r.id}:${r.latencyMs ?? '-'}${r.degraded ? '(deg)' : ''}`).join(' '),
-    gate: p95 !== null && p95 <= 2000,
+    // 门禁三态：indeterminate（不可判定）≠ fail（不通过）≠ pass（通过）
+    gate: gateState === 'pass',
+    gateState,
+    gateReason: gateState === 'indeterminate'
+      ? 'no valid samples (all queries degraded or provider-class errors) — indeterminate, not pass'
+      : (gateState === 'fail' ? `p95 ${p95}ms > 2000ms` : `p95 ${p95}ms <= 2000ms`),
   }
 }
 
@@ -304,42 +430,100 @@ async function evalArm(
 
 /**
  * L1 方差门禁（V1.11：10 次运行，均值 ≥30% 且无单次 <20%）。
- * 每轮 expander.clear()（清扩展缓存）→ hard 查询集 L1-live 臂独立扩展 14 次。
+ * 每轮 expander.clear()（清扩展缓存）→ hard 查询集独立扩展 14 次。
+ *
+ * 双臂（t000030）：DESIGN:235 要求「both the C arm and the D arm」进 10-run variance 条款。
+ *  - **C 臂**：base 表（仅原文）+ 逐条真实扩展（backs the default-config gate）
+ *  - **D 臂**：rich 表（原文 + 富化）+ 逐条真实扩展
+ * 两臂分别给 mean/range/floor 判据（C: mean≥30% floor≥20%；D: mean≥60% floor≥45%）。
+ *
+ * 阈值随**扩展模型**标定（t000030）：上游 30%/60% 是在 deepseek-chat 上定的；
+ * 换扩展模型后阈值不再是同一把尺 ⇒ 输出显式声明本次 provider/model。
  */
 async function variance(
   deps: { expander: QueryExpander; service: KnowledgeService },
   runs: number,
 ): Promise<Record<string, unknown>> {
-  const perRun: Array<{ run: number; recall1: string; ranks: string; degraded: string | null }> = []
   // 目标 id 按 dedupeKey 解析（确定性 id 是 k-<hash> 前缀，与语料 target 名不同）
   const dedupeMap = await deps.service._dedupeIds()
+  const arms: Record<string, { perRun: Array<{ run: number; recall1: string; ranks: string; degraded: string | null }> }> = { C: { perRun: [] }, D: { perRun: [] } }
   for (let i = 0; i < runs; i++) {
+    // C 臂与 D 臂共用同一轮扩展（同一批变体）⇒ 臂间差只来自「有无富化」
     deps.expander.clear()
-    const arm = await evalArm(deps, HARD_QUERIES, 'rich', true, null, dedupeMap)
-    perRun.push({
-      run: i + 1,
-      recall1: String(arm.recall1),
-      ranks: String(arm.ranks),
-      degraded: arm.degraded === null || arm.degraded === undefined ? null : String(arm.degraded),
-    })
+    const c = await evalArm(deps, HARD_QUERIES, 'base', true, null, dedupeMap)
+    const d = await evalArm(deps, HARD_QUERIES, 'rich', true, null, dedupeMap)
+    for (const [key, arm] of [['C', c], ['D', d]] as Array<[string, Record<string, unknown>]>) {
+      arms[key].perRun.push({
+        run: i + 1,
+        recall1: String(arm.recall1),
+        ranks: String(arm.ranks),
+        degraded: arm.degraded === null || arm.degraded === undefined ? null : String(arm.degraded),
+      })
+    }
   }
-  const values = perRun.map((r) => Number(r.recall1.split('/')[0]))
-  const mean = values.reduce((a, b) => a + b, 0) / values.length
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const pct = (n: number): number => Math.round((100 * n) / 14)
+  const summarize = (
+    perRun: Array<{ run: number; recall1: string; ranks: string; degraded: string | null }>,
+    meanGate: number,
+    floorGate: number,
+  ): Record<string, unknown> => {
+    const values = perRun.map((r) => Number(r.recall1.split('/')[0]))
+    const mean = values.reduce((a, b) => a + b, 0) / values.length
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const pct = (n: number): number => Math.round((100 * n) / 14)
+    const degradedCount = perRun.filter((r) => r.degraded !== null).length
+    return {
+      perRun: perRun.map((r) => `${r.run}: ${r.recall1}${r.degraded !== null ? ` (deg:${r.degraded})` : ''}`),
+      recall1Values: values,
+      meanRecall1Pct: pct(mean),
+      minRecall1Pct: pct(min),
+      maxRecall1Pct: pct(max),
+      range: `${pct(min)}%-${pct(max)}%`,
+      degradedRuns: degradedCount,
+      gateMean: mean / 14 >= meanGate,
+      gateFloor: min / 14 >= floorGate,
+      thresholds: { mean: `${Math.round(meanGate * 100)}%`, floor: `${Math.round(floorGate * 100)}%` },
+    }
+  }
+  const cSum = summarize(arms.C.perRun, 0.3, 0.2)
+  const dSum = summarize(arms.D.perRun, 0.6, 0.45)
+  // 扩展模型声明（t000030）：阈值是「在扩展模型 X 下」标定的，换模型即换尺
+  const route = currentExpansionRoute(deps)
   return {
     name: 'variance',
     ok: true,
     runs,
-    perRun: perRun.map((r) => `${r.run}: ${r.recall1}${r.degraded !== null ? ` (deg:${r.degraded})` : ''}`),
-    recall1Values: values,
-    meanRecall1Pct: pct(mean),
-    minRecall1Pct: pct(min),
-    maxRecall1Pct: pct(max),
-    range: `${pct(min)}%-${pct(max)}%`,
-    gateMean: mean / 14 >= 0.3,
-    gateFloor: min / 14 >= 0.2,
+    // 扩展 provider/model 声明（门禁读数的前提条件）
+    expansionModel: {
+      provider: route.provider,
+      model: route.model,
+      note: '门禁阈值随扩展模型标定（上游 deepseek-chat：C 35.7%[29-43] / D 63.6%[50-79]）；换模型即换尺',
+    },
+    // C 臂 = base 表 + 逐条真实扩展（默认配置门禁依据）
+    armC: cSum,
+    // D 臂 = rich 表 + 逐条真实扩展（L1+L2）
+    armD: dSum,
+    // 兼容旧字段（单臂读数）：D 臂即原实现的「rich + 逐条扩展」
+    perRun: cSum.perRun,
+    recall1Values: cSum.recall1Values,
+    meanRecall1Pct: cSum.meanRecall1Pct,
+    minRecall1Pct: cSum.minRecall1Pct,
+    maxRecall1Pct: cSum.maxRecall1Pct,
+    range: cSum.range,
+    gateMean: cSum.gateMean,
+    gateFloor: cSum.gateFloor,
+  }
+}
+
+/** 当前扩展路由（provider/model）——门禁读数的声明前提。 */
+function currentExpansionRoute(deps: { expander: QueryExpander }): { provider: string | null; model: string | null } {
+  const sel = deps.expander.ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } } | undefined
+  if (sel === undefined) return { provider: null, model: null }
+  try {
+    const s = sel.currentSelection()
+    return { provider: s?.provider ?? null, model: s?.model ?? null }
+  } catch {
+    return { provider: null, model: null }
   }
 }
 

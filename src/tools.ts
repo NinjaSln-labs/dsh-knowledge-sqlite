@@ -125,18 +125,18 @@ export function registerKnowledgeTools(ctx: Context, service: KnowledgeService):
 
   ctx.tools.register(defineTool({
     name: 'knowledge_probe',
-    description: '实验套件验证工具（阶段 3 门禁）：seed 装载 memory-experiment 语料，评估 hard/human 查询集'
-      + ' A/C/D/L1-live 臂 recall@1 与 precision@1（信息性），human 套件含 none 查询无误报检查，跑契约检查。'
-      + 'suite: seed|hard|human|contract|all',
+    description: '实验套件验证工具（阶段 3 门禁）：seed 装载 memory-experiment 语料，评估 hard/human/knowledge 查询集'
+      + ' A/C/D/L1-live 臂 recall@1 与 precision@1（信息性），human/knowledge 套件含 none 查询无误报检查，跑契约检查。'
+      + 'suite: seed|hard|human|knowledge|contract|all',
     parameters: {
-      suite: { type: 'string', required: true, enum: ['seed', 'hard', 'human', 'contract', 'latency', 'variance', 'all'], description: '验证阶段' },
+      suite: { type: 'string', required: true, enum: ['seed', 'hard', 'human', 'knowledge', 'contract', 'latency', 'variance', 'all'], description: '验证阶段' },
       fresh: { type: 'boolean', description: '清空 L1 扩展缓存后执行（单轮独立扩展）' },
       runs: { type: 'number', description: 'variance 套件的运行轮数，默认 10（每轮清缓存独立扩展）' },
     },
     output: { schema: { type: 'json' }, render: renderJson },
     async execute(args) {
       const result = await service.probe(
-        args.suite as 'seed' | 'hard' | 'human' | 'contract' | 'latency' | 'variance' | 'all',
+        args.suite as 'seed' | 'hard' | 'human' | 'knowledge' | 'contract' | 'latency' | 'variance' | 'all',
         { fresh: args.fresh === true, runs: typeof args.runs === 'number' ? args.runs : 10 },
       )
       return result as unknown as JsonValue

@@ -60,11 +60,15 @@ const UNSUPPORTED_REASONING_EFFORT = 'UNSUPPORTED_REASONING_EFFORT'
 export class QueryExpander {
   private readonly cache = new Map<string, string[]>()
   private msgSeq = 0
+  /** 宿主上下文（只读）：门禁报告需声明当前扩展路由（provider/model）。 */
+  readonly ctx: Context
   stats = {
     calls: 0,
     cacheHits: 0,
     persistHits: 0,
     degraded: 0,
+    /** 空变体后用更大预算重试并成功的次数（t000027：reasoning 模型思维链吃预算 ⇒ 截断）。 */
+    retryRecovered: 0,
     totalLatencyMs: 0,
     /** 降级原因首段 → 次数（诊断；probe 的 expansion-stats 会展开）。 */
     degradeReasons: {} as Record<string, number>,
@@ -73,10 +77,12 @@ export class QueryExpander {
   }
 
   constructor(
-    private readonly ctx: Context,
+    ctx: Context,
     private readonly config: QueryExpansionConfig,
     private readonly persist: ExpansionCacheStore | null = null,
-  ) {}
+  ) {
+    this.ctx = ctx
+  }
 
   clear(): void {
     this.cache.clear()
@@ -114,8 +120,26 @@ export class QueryExpander {
     const latencyMs = Date.now() - started
     this.stats.totalLatencyMs += latencyMs
     if (!outcome.ok) return this.degrade(outcome.reason, latencyMs)
-    const variants = parseVariants(outcome.text)
+    let variants = parseVariants(outcome.text)
+    // 空变体 = 输出被截断或解析失败。reasoning 模型的思维链会吃光总输出预算
+    // （实测 maxTokens 300 下思维链 46-67 个 chunk ⇒ 正式输出被 JSON 截断），
+    // 而非 reasoning 模型在同预算下正常 ⇒ 只在这条失败路径上用更大预算重试一次，
+    // 正常路径行为不变（非 reasoning 模型不会触发第二次调用）。
     if (variants.length === 0) {
+      const retry = await this.callModel(query, signal, this.config.maxOutputTokens * 2)
+      if (retry.ok) {
+        variants = parseVariants(retry.text)
+        if (variants.length > 0) {
+          const retryLatency = Date.now() - started
+          this.stats.totalLatencyMs += retryLatency - latencyMs
+          this.stats.retryRecovered++
+          if (this.config.cache) {
+            this.cache.set(norm, variants)
+            if (wsId !== undefined && this.persist !== null) this.persist.set(wsId, norm, variants)
+          }
+          return { variants, source: 'live', degraded: false, latencyMs: retryLatency }
+        }
+      }
       return this.degrade(`empty-variants: raw=${JSON.stringify(outcome.text).slice(0, 200)}`, latencyMs)
     }
     if (this.config.cache) {
@@ -135,7 +159,11 @@ export class QueryExpander {
     return { variants: [], source: null, degraded: true, latencyMs, reason }
   }
 
-  private async callModel(query: string, signal?: AbortSignal): Promise<{ ok: boolean; text: string; reason: string }> {
+  private async callModel(
+    query: string,
+    signal?: AbortSignal,
+    maxOutputTokens?: number,
+  ): Promise<{ ok: boolean; text: string; reason: string }> {
     // 模型路由：provider 优先取专用扩展 provider（QueryExpansionConfig.provider，0.1.10 起生效），
     // 否则跟随会话默认；model 优先取专用扩展模型，否则会话默认。
     const sel = this.ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } } | undefined
@@ -162,10 +190,10 @@ export class QueryExpander {
     // 此时去掉该参数重试一次即通；未被拒的模型本就支持 reasoning，保留 'off' 以关闭思维链
     // （thinking 预热可让 TTFT 高达 3s+：实测 opencode-go deepseek-v4-flash 默认 thinking 全开，
     // TTFT 3387ms / total 11.3s，见 EXPERIMENTS §9）。
-    const attempt = await this.streamOnce(llm, { provider, model, query, signal, reasoningEffort: 'off' })
+    const attempt = await this.streamOnce(llm, { provider, model, query, signal, reasoningEffort: 'off', maxOutputTokens })
     if (attempt.ok) return { ok: true, text: attempt.text, reason: '' }
     if (attempt.code === UNSUPPORTED_REASONING_EFFORT) {
-      const retry = await this.streamOnce(llm, { provider, model, query, signal, reasoningEffort: undefined })
+      const retry = await this.streamOnce(llm, { provider, model, query, signal, reasoningEffort: undefined, maxOutputTokens })
       if (retry.ok) return { ok: true, text: retry.text, reason: '' }
       return { ok: false, text: '', reason: retry.reason }
     }
@@ -178,7 +206,7 @@ export class QueryExpander {
    */
   private async streamOnce(
     llm: { stream(options: unknown): AsyncIterable<{ type: string; text?: string; reason?: { kind: string; failure?: { message?: string; code?: string } } }> },
-    args: { provider: string; model: string; query: string; signal?: AbortSignal; reasoningEffort?: 'off' },
+    args: { provider: string; model: string; query: string; signal?: AbortSignal; reasoningEffort?: 'off'; maxOutputTokens?: number },
   ): Promise<{ ok: boolean; text: string; message: string; reason: string; code?: string }> {
     let text = ''
     let streamError: string | null = null
@@ -194,7 +222,7 @@ export class QueryExpander {
             source: { kind: 'plugin', plugin: 'dsh-knowledge-sqlite' },
             id: `knl-expand-${this.msgSeq++}`,
           }],
-          maxTokens: this.config.maxOutputTokens,
+          maxTokens: args.maxOutputTokens ?? this.config.maxOutputTokens,
           temperature: 0.2,
           ...(args.reasoningEffort === undefined ? {} : { reasoningEffort: args.reasoningEffort }),
           signal: args.signal,

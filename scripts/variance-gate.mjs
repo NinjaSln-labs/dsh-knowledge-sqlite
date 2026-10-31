@@ -103,7 +103,7 @@ async function rankOf(store, dedupe, target, texts, table) {
   const gs = new Set();
   for (const t of texts) for (const g of grams(t)) gs.add(g);
   if (gs.size === 0) return -1;
-  const rows = await store.search(table, texts, STAMPS, { scope: 'workspace', topN: 20 });
+  const { rows } = await store.search(table, texts, STAMPS, { scope: 'workspace', topN: 20 });
   const targetId = dedupe.get(target);
   return rows.findIndex((r) => r.item.id === targetId);
 }

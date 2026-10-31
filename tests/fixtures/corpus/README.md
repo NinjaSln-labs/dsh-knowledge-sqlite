@@ -12,6 +12,14 @@
   t000002 度量的**对照输入**（对比 `enriched.json` 的基准富化）。由
   `node scripts/enrich-llm-gen.mjs` 生成，有采样方差（实测两批在 L1 路径下 50% vs 64%），
   `_meta` 记生成时间与 provider/model；**重新生成会改变度量数字**（EXPERIMENTS §11.5）。
+- `knowledge-queries.json`（t000028 起，0.1.12）：**知识条目侧查询集**——27 条
+  （24 有目标覆盖 m1-m12 各 2 条 + 3 none），补 human 集只测过程记录侧（n*）的对偶缺口。
+  写法对齐 human 集（真实口吻、少量 none、目标唯一），且**不复用 `enriched.json` 的问法**
+  （否则富化臂平凡命中）。判据见 EXPERIMENTS §19。
+- `llm-batches/`（t000024 起，0.1.12）：**LLM 富化的多批次归档**——每文件一个独立生成批次
+  （`_meta` 记生成时间与 provider/model）。t000024 判据取**下界**（单批次跑赢不构成证据，
+  EXP §11.5 实测波动 21%–64%）⇒ 需要多批次才能判定质量。当前归档 A/B/C 三批，
+  `enriched-llm.json` 是最近一批的副本（供 t000002 对照脚本用，与归档目录可能重复）。
 
 ## 语料分档（度量口径用）
 

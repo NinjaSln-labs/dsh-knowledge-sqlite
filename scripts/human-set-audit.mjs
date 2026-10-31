@@ -141,7 +141,7 @@ async function evalArm(targetOf, table, useL1) {
   for (const q of targeted) {
     const targetId = dedupe.get(targetOf(q));
     const texts = useL1 ? [q.text, ...(expanded.get(q.id)?.variants ?? [])] : [q.text];
-    const rows = await store.search(table, texts, STAMPS, { scope: 'workspace', topN: 20 });
+    const { rows } = await store.search(table, texts, STAMPS, { scope: 'workspace', topN: 20 });
     if (rows.findIndex((r) => r.item.id === targetId) === 0) r1++;
   }
   return { r1, n: targeted.length, pct: Math.round((100 * r1) / targeted.length) };

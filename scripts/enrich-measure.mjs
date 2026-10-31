@@ -77,7 +77,7 @@ async function measureArm(name, enrichmentMap, { useL1 = false } = {}) {
     const ranks = [];
     for (const q of scored) {
       const texts = useL1 ? [q.text, ...(expMap.get(q.id)?.variants ?? [])] : [q.text];
-      const rows = await store.search('rich', texts, STAMPS, { scope: 'workspace', topN: 20 });
+      const { rows } = await store.search('rich', texts, STAMPS, { scope: 'workspace', topN: 20 });
       const rank = rows.findIndex((r) => r.item.id === dedupe.get(q.target));
       ranks.push(`${q.id}:${rank === -1 ? '-' : rank + 1}`);
       if (rank === 0) r1++;

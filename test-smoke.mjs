@@ -42,7 +42,7 @@ async function evalArm(table, textsOf) {
   const ranks = []
   for (const q of queries) {
     const texts = textsOf(q)
-    const rows = await store.search(table, texts, caller, { topN: 5 })
+    const { rows } = await store.search(table, texts, caller, { topN: 5 })
     const target = dedupe.get(q.target) ?? q.target
     const rank = rows.findIndex((r) => r.item.id === target)
     ranks.push(`${q.id}:${rank === -1 ? '-' : rank + 1}`)
@@ -61,7 +61,7 @@ console.log('期望:  A 7%  C 21%  D 50%')
 // human A
 let r1 = 0
 for (const q of humanQueries.filter((x) => x.target !== 'none')) {
-  const rows = await store.search('base', [q.text], caller, { topN: 5 })
+  const { rows } = await store.search('base', [q.text], caller, { topN: 5 })
   const target = dedupe.get(q.target) ?? q.target
   if (rows.findIndex((r) => r.item.id === target) === 0) r1++
 }
@@ -73,7 +73,7 @@ const humanExpById = new Map(humanExpanded.map((e) => [e.id, e]))
 let cR1 = 0
 for (const q of humanQueries.filter((x) => x.target !== 'none')) {
   const vs = humanExpById.get(q.id)?.variants ?? []
-  const rows = await store.search('base', [q.text, ...vs], caller, { topN: 5 })
+  const { rows } = await store.search('base', [q.text, ...vs], caller, { topN: 5 })
   const target = dedupe.get(q.target) ?? q.target
   if (rows.findIndex((r) => r.item.id === target) === 0) cR1++
 }
@@ -89,19 +89,19 @@ const forged = await store.write({ content: 'x', workspaceId: 'ws-fake' }, stamp
 console.log('forged write:', 'error' in forged ? `拒绝 ✓ (${forged.error.code})` : '未拒绝 ✗')
 // TTL
 const ttl = await store.write({ content: 'TTL 冒烟', ttl: 1 }, stamps, [], actorId)
-const ttlFresh = await store.search('rich', ['TTL 冒烟'], caller, { topN: 5 })
+const { rows: ttlFresh } = await store.search('rich', ['TTL 冒烟'], caller, { topN: 5 })
 await new Promise((r) => setTimeout(r, 1100))
-const ttlStale = await store.search('rich', ['TTL 冒烟'], caller, { topN: 5 })
+const { rows: ttlStale } = await store.search('rich', ['TTL 冒烟'], caller, { topN: 5 })
 console.log('TTL:', ttlFresh.some((r) => r.item.id === ttl.id) && !ttlStale.some((r) => r.item.id === ttl.id) ? '✓' : '✗')
 // tombstone
 const del = await store.write({ content: '冒烟删除', dedupeKey: 'smoke-del' }, stamps, [], actorId)
-const before = await store.search('rich', ['冒烟删除'], caller, { topN: 5 })
+const { rows: before } = await store.search('rich', ['冒烟删除'], caller, { topN: 5 })
 const delR = await store.delete(del.id, caller)
-const after = await store.search('rich', ['冒烟删除'], caller, { topN: 5 })
+const { rows: after } = await store.search('rich', ['冒烟删除'], caller, { topN: 5 })
 console.log('tombstone:', before.some((r) => r.item.id === del.id) && delR.deleted === true && !after.some((r) => r.item.id === del.id) ? '✓' : '✗')
 // 跨 workspace
 const alien = { workspaceId: '/ws/other', ownerId: 'alien', authorTier: 'explicit', sessionId: 'alien' }
-const alienSearch = await store.search('rich', ['冒烟删除'], alien, { topN: 5 })
+const { rows: alienSearch } = await store.search('rich', ['冒烟删除'], alien, { topN: 5 })
 const alienDel = await store.delete(del.id, alien)
 console.log('cross-ws:', alienSearch.length === 0 && 'error' in alienDel ? '✓' : '✗')
 // list 分页

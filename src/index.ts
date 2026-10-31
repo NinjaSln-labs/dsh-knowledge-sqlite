@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { SqliteKnowledgeStore } from './store.ts'
 import type { StoredItem } from './store.ts'
 import { QueryExpander } from './expand.ts'
-import { estimateTokens, provenanceOf, queryGrams, snippetOf } from './search.ts'
+import { estimateTokens, provenanceOf, snippetOf } from './search.ts'
 import type {
   AuthorTier,
   KnowledgeHit,
@@ -303,13 +303,12 @@ export class KnowledgeService extends Service {
       expansion = { used: true, source: 'caller', degraded: false, latencyMs: 0, variantsCount: variants.length }
     }
     const texts = variants !== null && variants.length > 0 ? [query, ...variants] : [query]
-    const rows = await this.store.search(table === 'items_fts_base' ? 'base' : 'rich', texts, { ...caller.stamps, sessionId: caller.sessionId }, {
+    const { rows, qgrams } = await this.store.search(table === 'items_fts_base' ? 'base' : 'rich', texts, { ...caller.stamps, sessionId: caller.sessionId }, {
       scope: opts.scope,
       topN: this.config.retrieval.topN,
       maxQueryTrigrams: this.config.retrieval.maxQueryTrigrams,
     })
     const maxItems = opts.budget?.maxItems ?? this.config.retrieval.topN
-    const qgrams = queryGrams(texts.join(' '))
     const hits: KnowledgeHit[] = []
     let tokens = 0
     for (const r of rows) {
@@ -339,7 +338,7 @@ export class KnowledgeService extends Service {
 
   // ============ 实验套件探针（阶段 3 门禁 e2e） ============
   async probe(
-    suite: 'seed' | 'hard' | 'human' | 'contract' | 'latency' | 'variance' | 'all',
+    suite: 'seed' | 'hard' | 'human' | 'knowledge' | 'contract' | 'latency' | 'variance' | 'all',
     opts: { fresh?: boolean; runs?: number } = {},
   ): Promise<{ ok: boolean; parts: Array<Record<string, unknown>> }> {
     // fresh：清扩展缓存——单轮方差需要独立扩展（缓存会杀死随机性）
@@ -380,7 +379,7 @@ const knowledgeSqlitePlugin = {
         },
         retrieval: {
           topN: config.retrieval?.topN ?? 20,
-          maxQueryTrigrams: config.retrieval?.maxQueryTrigrams ?? 0, // 0 = 不限（对齐实验基线；生产可设 24，见 README）
+          maxQueryTrigrams: config.retrieval?.maxQueryTrigrams ?? 24, // 对齐 DESIGN:135（df 走 fts5vocab 词表，非 O(N) 扫描）
           maxCandidates: config.retrieval?.maxCandidates ?? 200,
         },
         authorization: {

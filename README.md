@@ -68,7 +68,7 @@ Plugin row config (all optional, defaults are the V1.11 proposal defaults):
       cache: true
     retrieval:
       topN: 20
-      maxQueryTrigrams: 0                      # 0 = unlimited; cap 24 needs idf-priority truncation (see EXPERIMENTS)
+      maxQueryTrigrams: 24                     # default 24 = idf-priority truncation (0 = unlimited)
       maxCandidates: 200
     authorization:
       allowedGlobalWriters: []                 # agent/preset ids allowed to write global scope

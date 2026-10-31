@@ -66,7 +66,7 @@ DSH 现有的全文检索使用 `unicode61`，无法匹配中文子串。在项�
       cache: true
     retrieval:
       topN: 20
-      maxQueryTrigrams: 0                      # 0 = 不限；上限 24 需 idf 优先截断（见 EXPERIMENTS）
+      maxQueryTrigrams: 24                     # 默认 24 = idf 优先截断（0 = 不限）
       maxCandidates: 200
     authorization:
       allowedGlobalWriters: []                 # 允许写入 global 范围的 agent/preset id

@@ -29,15 +29,19 @@ export function docGrams(text: string): string[] {
  * @param grams 查询 gram 集合（已去重）
  */
 export function matchOf(grams: string[]): string {
-  return grams.map((g) => `"${g}"`).join(' OR ')
+  return grams.map((g) => `"${g.replace(/"/g, '""')}"`).join(' OR ')
 }
 
 /**
  * gram 截断：生产 maxQueryTrigrams 封顶时按 idf 降序保留（顺序截断会丢失长查询
  * 判别词汇——原型实测 human A 65%→41%；idf 高的 gram 更稀有、判别力更强）。
+ *
+ * idf 由 df 推出：df = 含该 gram 的文档数，totalDocs = 可见文档总数。
+ * 同频（df 相同）的 gram idf 相同 ⇒ 排序**稳定**（保持入参顺序），
+ * 故 idf 优先与顺序截断的差异只来自「df 不同」的 gram 被提前保留。
  * @param grams 查询 gram 集合
- * @param dfOf gram → 包含它的文档数（本 workspace 可见文档）
- * @param totalDocs 文档总数
+ * @param dfOf gram → 包含它的文档数（可见文档口径；查不到 = 0）
+ * @param totalDocs 可见文档总数
  * @param cap 0 = 不限
  */
 export function truncateGrams(grams: string[], dfOf: Map<string, number>, totalDocs: number, cap: number): string[] {
